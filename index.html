@@ -1,10 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="hu">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>GRÁNIT Content Intelligence</title>
+  <meta name="theme-color" content="#073f48">
+  <title>GRÁNIT Tartalom- és Reputációs Dashboard</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -14,131 +15,119 @@
   <main id="setup-screen" class="center-screen hidden">
     <section class="auth-card">
       <div class="brand-mark">G</div>
-      <h1>Configuration needed</h1>
-      <p>Edit <code>config.js</code> in the dashboard repository and paste the Supabase Project URL and publishable key.</p>
-      <p class="muted">No API password belongs in this file.</p>
+      <p class="eyebrow">EGYSZERI BEÁLLÍTÁS SZÜKSÉGES</p>
+      <h1>A dashboard még nincs összekötve a Supabase-szel</h1>
+      <p>Nyisd meg a GitHub-repositoryban a <code>config.js</code> fájlt, és illeszd be a Supabase projekt URL-jét és publishable kulcsát.</p>
+      <p class="muted">Titkos vagy service-role kulcs soha ne kerüljön ebbe a fájlba.</p>
     </section>
   </main>
 
   <main id="login-screen" class="center-screen hidden">
     <section class="auth-card">
       <div class="brand-mark">G</div>
-      <p class="eyebrow">PRIVATE ANALYTICS</p>
+      <p class="eyebrow">BELSŐ ELEMZÉSI FELÜLET</p>
       <h1>GRÁNIT Content Intelligence</h1>
-      <p>Sign in with the dashboard user created in Supabase.</p>
+      <p>Jelentkezz be a Supabase-ben létrehozott dashboard-felhasználóval.</p>
       <form id="login-form">
-        <label>Email<input id="email" type="email" autocomplete="username" required></label>
-        <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit" class="primary-button">Sign in</button>
+        <label>E-mail-cím<input id="email" type="email" autocomplete="username" required></label>
+        <label>Jelszó<input id="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="primary-button">Bejelentkezés</button>
       </form>
       <p id="login-error" class="error-text"></p>
     </section>
   </main>
 
-  <div id="app" class="hidden">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">CONTENT PERFORMANCE CONTROL ROOM</p>
-        <h1 id="dashboard-title">GRÁNIT Content Intelligence</h1>
+  <div id="app" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small">G</div>
+        <div><strong>GRÁNIT</strong><span>Content Intelligence</span></div>
       </div>
-      <div class="header-actions">
-        <span id="last-refresh" class="status-pill">Loading data…</span>
-        <button id="refresh-button" class="secondary-button">Refresh</button>
-        <button id="logout-button" class="secondary-button">Sign out</button>
+      <nav id="main-nav" class="main-nav" aria-label="Fő navigáció">
+        <button class="nav-item active" data-page="overview"><span>◫</span>Összkép</button>
+        <p class="nav-group">SAJÁT CSATORNÁK</p>
+        <button class="nav-item" data-page="newsletter"><span>✉</span>Hírlevél</button>
+        <button class="nav-item" data-page="blog"><span>▤</span>Grandio Blog</button>
+        <button class="nav-item" data-page="linkedin_company"><span>in</span>LinkedIn – vállalati</button>
+        <button class="nav-item" data-page="linkedin_ceo"><span>in</span>LinkedIn – vezetői</button>
+        <button class="nav-item" data-page="facebook"><span>f</span>Facebook</button>
+        <button class="nav-item" data-page="instagram"><span>◎</span>Instagram</button>
+        <button class="nav-item" data-page="youtube"><span>▶</span>YouTube</button>
+        <p class="nav-group">ELEMZÉS</p>
+        <button class="nav-item" data-page="content"><span>⌕</span>Tartalomkereső</button>
+        <button class="nav-item" data-page="stories"><span>◇</span>Sztorik és témák</button>
+        <button class="nav-item" data-page="observer"><span>◉</span>Observer</button>
+        <button class="nav-item" data-page="ai"><span>✦</span>AI elemző</button>
+        <p class="nav-group">RENDSZER</p>
+        <button class="nav-item" data-page="connections"><span>⚙</span>Adatkapcsolatok</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="signed-in-user"></span>
+        <button id="logout-button" class="ghost-button">Kijelentkezés</button>
       </div>
-    </header>
+    </aside>
 
-    <section class="filterbar">
-      <label>Period
-        <select id="range-select">
-          <option value="30">Last 30 days</option>
-          <option value="90" selected>Last 90 days</option>
-          <option value="365">Last 12 months</option>
-          <option value="all">All available history</option>
-        </select>
-      </label>
-      <label>Channel
-        <select id="source-select">
-          <option value="all">All channels</option>
-          <option value="blog">Grandio Blog</option>
-          <option value="linkedin_company">Company LinkedIn</option>
-          <option value="linkedin_ceo">CEO LinkedIn</option>
-          <option value="facebook">Facebook</option>
-          <option value="instagram">Instagram</option>
-          <option value="youtube">YouTube</option>
-          <option value="mailchimp">Mailchimp</option>
-        </select>
-      </label>
-      <label>Trend
-        <select id="trend-select">
-          <option value="exposure">Exposure / views</option>
-          <option value="clicks">Clicks</option>
-          <option value="engagement">Interactions</option>
-          <option value="publishing">Published content</option>
-        </select>
-      </label>
-    </section>
-
-    <section class="kpi-grid">
-      <article class="kpi-card"><span>Exposure / views</span><strong id="kpi-exposure">–</strong><small id="kpi-exposure-note">Selected period</small></article>
-      <article class="kpi-card"><span>Clicks</span><strong id="kpi-clicks">–</strong><small id="kpi-clicks-note">Selected period</small></article>
-      <article class="kpi-card"><span>Interactions</span><strong id="kpi-engagement">–</strong><small id="kpi-engagement-note">Selected period</small></article>
-      <article class="kpi-card"><span>Current audience</span><strong id="kpi-audience">–</strong><small>Latest available snapshots</small></article>
-    </section>
-
-    <section class="two-column">
-      <article class="panel panel-wide">
-        <div class="panel-heading">
-          <div><p class="eyebrow">TREND</p><h2 id="trend-heading">Exposure / views</h2></div>
-          <div class="legend-note">Daily value + 7- and 28-day moving averages</div>
+    <main class="workspace">
+      <header class="topbar">
+        <div class="topbar-title">
+          <button id="menu-button" class="icon-button" aria-label="Menü">☰</button>
+          <div>
+            <p id="page-eyebrow" class="eyebrow">VEZETŐI ÖSSZKÉP</p>
+            <h1 id="page-title">Összkép</h1>
+            <p id="page-subtitle" class="page-subtitle">A saját csatornák és a médiamegjelenések közös áttekintése.</p>
+          </div>
         </div>
-        <div class="chart-wrap"><canvas id="trend-chart"></canvas></div>
-      </article>
-      <article class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">CHANNEL MIX</p><h2>Performance by channel</h2></div></div>
-        <div class="chart-wrap compact"><canvas id="platform-chart"></canvas></div>
-      </article>
-    </section>
+        <div class="header-actions">
+          <span id="last-refresh" class="status-pill">Adatok betöltése…</span>
+          <button id="refresh-button" class="secondary-button">Frissítés</button>
+        </div>
+      </header>
 
-    <section class="panel">
-      <div class="panel-heading table-heading">
-        <div><p class="eyebrow">CONTENT EXPLORER</p><h2>Top content</h2></div>
-        <div class="table-controls">
-          <input id="content-search" type="search" placeholder="Search title or author">
-          <select id="content-sort">
-            <option value="exposure">Sort by exposure</option>
-            <option value="clicks">Sort by clicks</option>
-            <option value="engagement">Sort by interactions</option>
-            <option value="date">Sort by date</option>
+      <section id="filterbar" class="filterbar">
+        <label>Időszak
+          <select id="range-select">
+            <option value="30">Elmúlt 30 nap</option>
+            <option value="90" selected>Elmúlt 90 nap</option>
+            <option value="365">Elmúlt 12 hónap</option>
+            <option value="year">Aktuális év</option>
+            <option value="all">Minden elérhető adat</option>
           </select>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Content</th><th>Channel</th><th>Date</th><th>Exposure</th><th>Clicks</th><th>Interactions</th></tr></thead>
-          <tbody id="content-table"></tbody>
-        </table>
-      </div>
-      <p id="content-empty" class="empty-state hidden">No matching content in this period.</p>
-    </section>
+        </label>
+        <label>Összehasonlítás
+          <select id="compare-select">
+            <option value="previous" selected>Előző azonos időszak</option>
+            <option value="none">Nincs összehasonlítás</option>
+          </select>
+        </label>
+        <label id="global-source-label">Csatorna
+          <select id="source-select">
+            <option value="all">Minden csatorna</option>
+            <option value="blog">Grandio Blog</option>
+            <option value="mailchimp">Hírlevél</option>
+            <option value="linkedin_company">LinkedIn – vállalati</option>
+            <option value="linkedin_ceo">LinkedIn – vezetői</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+            <option value="youtube">YouTube</option>
+            <option value="observer">Observer</option>
+          </select>
+        </label>
+      </section>
 
-    <section class="two-column lower-grid">
-      <article class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">AUTOMATION HEALTH</p><h2>Latest collector runs</h2></div></div>
-        <div id="sync-grid" class="sync-grid"></div>
-      </article>
-      <article class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">AI MANAGEMENT NOTE</p><h2>Latest weekly analysis</h2></div></div>
-        <div id="ai-report" class="ai-report"><p class="muted">AI reporting is optional. Add an OpenAI API key and model in the collector repository to enable it.</p></div>
-      </article>
-    </section>
-
-    <footer>
-      <span>Data is collected automatically by GitHub Actions and stored in Supabase.</span>
-      <span id="signed-in-user"></span>
-    </footer>
+      <section id="page-content" class="page-content" aria-live="polite"></section>
+      <footer class="footer"><span>Automatikus adatgyűjtés: GitHub Actions · Adattárolás: Supabase</span><span id="footer-data-note"></span></footer>
+    </main>
   </div>
 
+  <div id="detail-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <article class="modal-card">
+      <button class="modal-close" data-close-modal aria-label="Bezárás">×</button>
+      <div id="modal-content"></div>
+    </article>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
   <script src="app.js"></script>
 </body>
 </html>
