@@ -178,6 +178,29 @@
     return contents([source], range).reduce((sum,c) => sum + contentMetric(c,names),0);
   }
   function audience(source) { return latestSnapshot(source, SOURCE[source]?.audience || [], ""); }
+  function snapshotSeries(source, names, range = selectedRange()) {
+    for (const name of names) {
+      const rows = metricRows(source, [name], range, "")
+        .filter((m) => m.aggregation_type === "snapshot")
+        .sort((a, b) => String(a.metric_date).localeCompare(String(b.metric_date)));
+      if (!rows.length) continue;
+      const byDate = new Map();
+      rows.forEach((row) => byDate.set(dayKey(row.metric_date), Number(row.metric_value || 0)));
+      const points = [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      return { labels: points.map(([date]) => dateHU(date)), values: points.map(([, value]) => value), dates: points.map(([date]) => date) };
+    }
+    return { labels: [], values: [], dates: [] };
+  }
+  function accountFlowSeries(source, names, range = selectedRange()) {
+    const dates = allDates(range);
+    const map = Object.fromEntries(dates.map((d)=>[d,0]));
+    state.metrics.filter((m)=>m.source===source && !m.content_external_id && names.includes(m.metric_name) && m.aggregation_type==="flow" && inRange(m.metric_date,range)).forEach((m)=>{
+      const d=dayKey(m.metric_date);
+      if(d in map) map[d]+=Number(m.metric_value||0);
+    });
+    return {labels:dates.map((d)=>dateHU(d)),values:dates.map((d)=>map[d]),dates};
+  }
+
   function contentStats(c) {
     const sc = SOURCE[c.source] || { exposure:[], clicks:[], engagement:[] };
     let engagement;
@@ -291,7 +314,14 @@
     const unsubscribeRate=delivered?unsub/delivered:0;
     const bounceRate=sent?bounce/sent:0;
     const audienceNow=audience("mailchimp");
+    const audienceHistory=snapshotSeries("mailchimp",SOURCE.mailchimp.audience,r);
+    const audienceStart=audienceHistory.values.length?audienceHistory.values[0]:audienceNow;
+    const audienceEnd=audienceHistory.values.length?audienceHistory.values[audienceHistory.values.length-1]:audienceNow;
+    const audienceGrowth=audienceHistory.values.length>1?audienceEnd-audienceStart:null;
+    const audienceGrowthRate=audienceGrowth!==null&&audienceStart?audienceGrowth/audienceStart:null;
     pageContent.innerHTML=`<section class="kpi-grid">
+      ${kpi("Aktuális feliratkozók",num(audienceNow),"Mailchimp listaállomány")}
+      ${kpi("Feliratkozói növekedés",audienceGrowth===null?"–":`${audienceGrowth>0?"+":""}${num(audienceGrowth)}`,audienceGrowth===null?"a napi mentésekkel válik mérhetővé":"az időszak elejéhez képest",audienceGrowthRate===null?undefined:audienceGrowthRate)}
       ${kpi("Kiküldve",num(sent),`${num(rows.length)} kampány`)}
       ${kpi("Kézbesítve",num(delivered),sent?`${pct(deliveryRate)} kézbesítési arány`:"–")}
       ${kpi("Egyedi megnyitók",num(opens),"legalább egyszer megnyitó címzettek",delta(opens,pOpens))}
@@ -301,9 +331,11 @@
       ${kpi("Leiratkozások",num(unsub),delivered?`${pct(unsubscribeRate)} a kézbesítettekből`:"–")}
       ${kpi("Visszapattanások",num(bounce),sent?`${pct(bounceRate)} · ${num(hardBounce)} hard, ${num(softBounce)} soft`:"–")}
     </section>
-    <div class="callout"><strong>A hírlevélnél a kiküldés nem elérés.</strong><p>Az összképben az egyedi megnyitókat használjuk elérésjellegű mutatóként, és név szerint is így jelenítjük meg. Aktuális listaállomány: <strong>${num(audienceNow)} feliratkozó</strong>. A megnyitási arányt az Apple Mail adatvédelmi funkciói torzíthatják; a kattintás és a weboldalon mért viselkedés megbízhatóbb teljesítménymutató.</p></div>
-    <section class="grid-2 equal" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KAMPÁNYTREND</p><h2>Megnyitási és átkattintási arány</h2></div><span class="panel-note">egyedi címzettek / kézbesített levelek</span></div><div class="chart-wrap"><canvas id="mail-rate-chart"></canvas></div></article>
+    <div class="callout"><strong>A hírlevél növekedését elsőként a feliratkozói bázis mutatja.</strong><p>A kiküldés továbbra sem elérés: az egyedi megnyitókat és kattintókat külön teljesítménymutatóként kezeljük. A nyitó diagram a feliratkozók számának alakulását mutatja; a kampányonkénti megnyitási és átkattintási arány lejjebb, változatlanul megmarad.</p></div>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">KÖZÖNSÉGNÖVEKEDÉS</p><h2>Feliratkozók számának alakulása</h2></div><span class="panel-note">napi Mailchimp-listaállomány · ${audienceGrowth===null?"a történet a futásokkal épül":`${audienceGrowth>0?"+":""}${num(audienceGrowth)} fő az időszakban`}</span></div><div class="chart-wrap"><canvas id="mail-audience-chart"></canvas></div></article>
+    <section class="grid-2 equal" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KIKÜLDÉS</p><h2>Kiküldött és kézbesített levelek</h2></div><span class="panel-note">kampányonkénti címzetti darabszám</span></div><div class="chart-wrap"><canvas id="mail-volume-chart"></canvas></div></article>
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">KATTINTÁSOK</p><h2>Legsikeresebb kampányok</h2></div><span class="panel-note">egyedi kattintók száma</span></div><div id="mail-rank" class="rank-list"></div></article></section>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">KAMPÁNYTREND</p><h2>Megnyitási és átkattintási arány</h2></div><span class="panel-note">egyedi címzettek / kézbesített levelek</span></div><div class="chart-wrap"><canvas id="mail-rate-chart"></canvas></div></article>
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">HAVI KIMUTATÁS</p><h2>Hírlevél-statisztika</h2></div><span class="panel-note">minden darabszám címzetti, nem összes eseményszám</span></div><div class="table-wrap"><table><thead><tr><th>Dátum</th><th>Cím</th><th class="num">Kiküldve</th><th class="num">Kézbesítve</th><th class="num">Egyedi megnyitók</th><th class="num">Egyedi kattintók</th><th class="num">Visszapattanás</th><th class="num">Leiratkozás</th><th>Legtöbbet kattintott link</th><th>Legsikeresebb Grandio-cikk</th></tr></thead><tbody>${rows.length?rows.map(({c,m})=>{
       const campaignSent=contentMetric(c,["emails_sent"]);
       const campaignDelivered=contentMetric(c,["delivered"]);
@@ -316,6 +348,13 @@
       return `<tr><td>${dateHU(c.published_at)}</td><td><a class="content-link" data-content="mailchimp|${esc(c.external_id)}" href="#">${esc(c.title)}</a><div class="metric-definition">${esc(m.subject_line||"")}</div></td><td class="num">${num(campaignSent)}</td><td class="num">${num(campaignDelivered)}<div class="metric-definition">${campaignSent?pct(campaignDelivered/campaignSent):"–"}</div></td><td class="num">${num(campaignOpens)}<div class="metric-definition">${campaignDelivered?pct(campaignOpens/campaignDelivered):"–"}</div></td><td class="num">${num(campaignClicks)}<div class="metric-definition">${campaignDelivered?pct(campaignClicks/campaignDelivered):"–"}</div></td><td class="num">${num(campaignBounce)}<div class="metric-definition">${campaignSent?pct(campaignBounce/campaignSent):"–"} · ${num(campaignHard)} hard / ${num(campaignSoft)} soft</div></td><td class="num">${num(campaignUnsub)}<div class="metric-definition">${campaignDelivered?pct(campaignUnsub/campaignDelivered):"–"}</div></td><td>${m.top_link_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_link_url)}">${esc(clampText(m.top_link_url,55))}</a><div class="metric-definition">${num(m.top_link_unique_clicks||m.top_link_clicks)} egyedi kattintó</div>`:"–"}</td><td>${m.top_grandio_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_grandio_url)}">${esc(clampText(m.top_grandio_url,55))}</a><div class="metric-definition">${num(m.top_grandio_unique_clicks||m.top_grandio_clicks)} egyedi kattintó</div>`:"–"}</td></tr>`;
     }).join(""):`<tr><td colspan="10"><div class="empty-state"><strong>Nincs kampány ebben az időszakban.</strong></div></td></tr>`}</tbody></table></div></article>`;
     const chronological=[...rows].reverse();
+    const audienceValues=audienceHistory.values.length?audienceHistory.values:[audienceNow];
+    const audienceLabels=audienceHistory.labels.length?audienceHistory.labels:[dateHU(new Date())];
+    const audienceMin=Math.min(...audienceValues);
+    const audienceMax=Math.max(...audienceValues);
+    const audiencePadding=Math.max(1,Math.ceil((audienceMax-audienceMin)*.18));
+    chart("mail-audience-chart",{type:"line",data:{labels:audienceLabels,datasets:[{label:"Feliratkozók",data:audienceValues,borderColor:"#0a4b55",backgroundColor:"rgba(45,230,140,.16)",fill:true,tension:.28,pointRadius:audienceValues.length>30?0:3,pointHoverRadius:5,borderWidth:3}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>`Feliratkozók: ${num(ctx.parsed.y)}`}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:false,suggestedMin:Math.max(0,audienceMin-audiencePadding),suggestedMax:audienceMax+audiencePadding,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+    chart("mail-volume-chart",{type:"bar",data:{labels:chronological.map((x)=>dateHU(x.c.published_at)),datasets:[{label:"Kiküldve",data:chronological.map((x)=>contentMetric(x.c,["emails_sent"])),backgroundColor:"rgba(19,112,125,.30)",borderColor:"#13707d",borderWidth:1,borderRadius:6},{label:"Kézbesítve",data:chronological.map((x)=>contentMetric(x.c,["delivered"])),backgroundColor:"rgba(45,230,140,.35)",borderColor:"#2de68c",borderWidth:1,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"},tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${num(ctx.parsed.y)}`}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"}}}}});
     chart("mail-rate-chart",{type:"line",data:{labels:chronological.map((x)=>dateHU(x.c.published_at)),datasets:[{label:"Megnyitási arány",data:chronological.map((x)=>{const d=contentMetric(x.c,["delivered"]),o=contentMetric(x.c,["unique_opens"]);return d?o/d*100:0;}),borderColor:"#13707d",backgroundColor:"transparent",tension:.3},{label:"Átkattintási arány",data:chronological.map((x)=>{const d=contentMetric(x.c,["delivered"]),c=contentMetric(x.c,["unique_clicks"]);return d?c/d*100:0;}),borderColor:"#2de68c",backgroundColor:"transparent",tension:.3}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"},tooltip:{callbacks:{label:(ctx)=>`${ctx.dataset.label}: ${num(ctx.parsed.y)}%`}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:(v)=>`${v}%`},grid:{color:"rgba(16,45,49,.06)"}}}}});
     const sorted=[...rows].sort((a,b)=>contentMetric(b.c,["unique_clicks"])-contentMetric(a.c,["unique_clicks"])).slice(0,7);
     const max=Math.max(...sorted.map((x)=>contentMetric(x.c,["unique_clicks"])),1);
@@ -335,6 +374,61 @@
     const categories={}; contents(["blog"],r).forEach((c)=>{const names=c.metadata?.category_names||[];const cat=names[0]||topicFor(c);categories[cat]=(categories[cat]||0)+1;}); const cats=Object.entries(categories).sort((a,b)=>b[1]-a[1]).slice(0,8); doughnut("blog-topic",cats.map((x)=>x[0]),cats.map((x)=>x[1]),["#0a4b55","#13707d","#2de68c","#7ba7a2","#b54708","#2867b2","#9b59b6","#526b6e"]);
   }
 
+  function renderLinkedInCompany() {
+    const source="linkedin_company",r=selectedRange(),p=previousRange();
+    const connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source);
+    const impressions=accountMetricTotal(source,["impressions"],r);
+    const clicks=accountMetricTotal(source,["clicks"],r);
+    const reactions=accountMetricTotal(source,["reactions"],r);
+    const comments=accountMetricTotal(source,["comments"],r);
+    const shares=accountMetricTotal(source,["shares"],r);
+    const interactions=reactions+comments+shares;
+    const followersNow=audience(source);
+    const followersGained=accountMetricTotal(source,["followers_gained"],r);
+    const pageViews=accountMetricTotal(source,["page_views"],r);
+    const uniqueVisitors=accountMetricTotal(source,["unique_visitors"],r);
+    const prevImpressions=p?accountMetricTotal(source,["impressions"],p):0;
+    const prevFollowers=p?accountMetricTotal(source,["followers_gained"],p):0;
+    const prevVisitors=p?accountMetricTotal(source,["unique_visitors"],p):0;
+    const ctr=impressions?clicks/impressions:0;
+    const interactionRate=impressions?interactions/impressions:0;
+    const items=topContents([source],12,r);
+    pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Még nincs LinkedIn-adat.</strong><p>Töltsd fel a LinkedIn Content, Followers és Visitors XLS exportokat a privát collector repositoryba.</p></div>`:`<div class="callout"><strong>LinkedIn-adatok betöltve.</strong><p>Az oldal a hivatalos LinkedIn Content, Followers és Visitors XLS exportokból épül. Az API jóváhagyása után ugyanez az adatmodell automatikusan tovább tölthető.</p></div>`}
+    <section class="kpi-grid six" style="margin-top:15px">
+      ${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}
+      ${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás")}
+      ${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`)}
+      ${kpi("Követők (export)",followersNow?num(followersNow,true):"–",followersNow?"demográfiai export összesítése":"az exportból nem volt biztosan meghatározható")}
+      ${kpi("Új követők",num(followersGained,true),rangeLabel(),p?delta(followersGained,prevFollowers):undefined)}
+      ${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}
+    </section>
+    <section class="grid-2">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐNÖVEKEDÉS</p><h2>Új követők alakulása</h2></div><span class="panel-note">napi új követők + 28 napos átlag</span></div><div class="chart-wrap"><canvas id="linkedin-followers-chart"></canvas></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">OLDALLÁTOGATOTTSÁG</p><h2>LinkedIn-oldal látogatói</h2></div><span class="panel-note">oldalmegtekintések és egyedi látogatók</span></div><div class="chart-wrap"><canvas id="linkedin-visitors-chart"></canvas></div></article>
+    </section>
+    <section class="grid-2">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">TARTALMI TELJESÍTMÉNY</p><h2>Megjelenések és kattintások</h2></div><span class="panel-note">napi organikus + szponzorált összesen</span></div><div class="chart-wrap"><canvas id="linkedin-performance-chart"></canvas></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORMÁTUMOK</p><h2>Tartalomtípusok eredménye</h2></div></div><div id="linkedin-format-rank" class="rank-list"></div></article>
+    </section>${contentTable(items,"LinkedIn – legjobban teljesítő posztok")}`;
+
+    const followerSeries=accountFlowSeries(source,["followers_gained"],r);
+    chart("linkedin-followers-chart",{type:"bar",data:{labels:followerSeries.labels,datasets:[{type:"bar",label:"Új követők",data:followerSeries.values,backgroundColor:"rgba(40,103,178,.28)",borderColor:"#2867b2",borderWidth:1,borderRadius:5},{type:"line",label:"28 napos átlag",data:movingAverage(followerSeries.values,28),borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.3,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+
+    const visitorSeries=accountFlowSeries(source,["unique_visitors"],r);
+    const pageViewSeries=accountFlowSeries(source,["page_views"],r);
+    lineChart("linkedin-visitors-chart",visitorSeries.labels,[{label:"Egyedi látogatók",data:visitorSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Oldalmegtekintések",data:pageViewSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
+
+    const impressionSeries=accountFlowSeries(source,["impressions"],r);
+    const clickSeries=accountFlowSeries(source,["clicks"],r);
+    lineChart("linkedin-performance-chart",impressionSeries.labels,[{label:"Megjelenések",data:impressionSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Kattintások",data:clickSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
+
+    const formats={};
+    contents([source],r).forEach((c)=>{const f=(c.content_type||"poszt").toLowerCase();formats[f]??={count:0,exp:0,clicks:0};formats[f].count++;formats[f].exp+=contentMetric(c,["impressions"]);formats[f].clicks+=contentMetric(c,["clicks"]);});
+    const formatRows=Object.entries(formats).map(([name,x])=>({name,...x})).sort((a,b)=>b.exp-a.exp);
+    const max=Math.max(...formatRows.map((x)=>x.exp),1);
+    $("linkedin-format-rank").innerHTML=formatRows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} poszt · ${num(x.clicks)} kattintás</small><div class="progress"><span style="width:${x.exp/max*100}%"></span></div></div><span class="rank-value">${num(x.exp,true)}</span></div>`).join("")||`<div class="empty-state">Még nincs formátumadat.</div>`;
+  }
+
   function platformConfig(source) {
     const configs={
       linkedin_company:{cards:[["Megjelenések","exposure"],["Kattintások","clicks"],["Interakciók","engagement"],["Követők","audience"],["Új követők","followers_gained"],["Publikált posztok","publishing"]],note:"A vállalati oldal natív statisztikái."},
@@ -346,6 +440,7 @@
   }
   function customMetric(source,name,range=selectedRange()) { if(name==="audience")return audience(source);if(["exposure","clicks","engagement","publishing"].includes(name))return sourceMetric(source,name,range);const account=accountMetricTotal(source,[name],range);if(account)return account;return contents([source],range).reduce((s,c)=>s+contentMetric(c,[name]),0); }
   function renderPlatform(source) {
+    if(source==="linkedin_company"){renderLinkedInCompany();return;}
     const pc=platformConfig(source),r=selectedRange(),p=previousRange(); const connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source); const items=topContents([source],12,r);
     pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Ez a csatorna még nincs bekötve.</strong><p>Az oldal szerkezete kész. Az API-kulcsok és jogosultságok beállítása után az adatok automatikusan megjelennek.</p></div>`:""}<section class="kpi-grid six" style="margin-top:${connected?0:15}px">${pc.cards.map(([label,key])=>{const value=customMetric(source,key,r),prev=p?customMetric(source,key,p):0;const formatted=key==="watch_minutes"?`${num(value)} perc`:num(value,true);return kpi(label,formatted,pc.note,["audience"].includes(key)?undefined:delta(value,prev));}).join("")}</section>
     <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TELJESÍTMÉNYTREND</p><h2>${esc(SOURCE[source].short)} – fő mutató</h2></div><span class="panel-note">napi érték + mozgóátlagok</span></div><div class="chart-wrap"><canvas id="platform-trend"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORMÁTUMOK</p><h2>Tartalomtípusok eredménye</h2></div></div><div id="format-rank" class="rank-list"></div></article></section>${contentTable(items,`${SOURCE[source].label} – legjobb tartalmak`)}`;
