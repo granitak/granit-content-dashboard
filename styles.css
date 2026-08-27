@@ -18,3 +18,16 @@ button{border:0;cursor:pointer;font-weight:750}.primary-button{min-height:44px;b
 @media(max-width:1250px){.kpi-grid.six{grid-template-columns:repeat(3,1fr)}.kpi-grid{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:1fr 1fr}.grid-3>*:last-child{grid-column:1/-1}}
 @media(max-width:900px){:root{--sidebar:0px}.sidebar{transform:translateX(-100%);width:270px;transition:transform .2s}.sidebar.open{transform:translateX(0)}.workspace{margin-left:0}.icon-button{display:block}.topbar{min-height:116px}.filterbar{grid-template-columns:1fr 1fr}.grid-2,.grid-2.equal,.grid-3{grid-template-columns:1fr}.grid-3>*:last-child{grid-column:auto}.kpi-grid.six{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){.topbar{align-items:flex-start;flex-direction:column;padding:20px}.header-actions{width:100%;justify-content:space-between}.filterbar{grid-template-columns:1fr;padding:16px 16px 0}.page-content{padding:15px 16px 25px}.kpi-grid,.kpi-grid.six{grid-template-columns:1fr 1fr;gap:10px}.kpi-card{min-height:110px;padding:15px}.kpi-card strong{font-size:25px}.panel{padding:15px}.chart-wrap{height:280px}.table-tools input{min-width:100%;width:100%}.footer{flex-direction:column;padding:16px}.modal{padding:10px}.modal-card{padding:22px 17px}.modal-meta{grid-template-columns:1fr}.story-stats{grid-template-columns:1fr 1fr}}
+
+
+/* 2026-08-27 dashboard usability update */
+th[data-sort-type]{cursor:pointer;user-select:none;white-space:nowrap;transition:background .15s,color .15s}
+th[data-sort-type]:hover,th[data-sort-type]:focus{background:#edf4f2;color:var(--brand);outline:none}
+th[data-sort-type]::after{content:" ↕";opacity:.32;font-size:10px}
+th[data-sort-dir="asc"]::after{content:" ↑";opacity:1;color:var(--brand)}
+th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
+.observer-table{min-width:1180px;table-layout:auto}
+.observer-table td{white-space:normal;word-break:normal;overflow-wrap:break-word}
+.observer-summary{max-width:720px;min-width:360px;margin:8px 0 0;line-height:1.6;color:var(--ink-soft);white-space:normal;word-break:normal;overflow-wrap:break-word}
+.observer-depth{min-width:180px;max-width:340px;line-height:1.55;white-space:normal!important;word-break:normal;overflow-wrap:break-word}
+.rank-list{max-height:none;overflow:visible}
