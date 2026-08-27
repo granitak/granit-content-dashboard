@@ -386,6 +386,24 @@
   }
 
   function campaignRows(range=selectedRange()) { return contents(["mailchimp"],range).map((c)=>({c,s:contentStats(c),m:c.metadata||{}})).sort((a,b)=>String(b.c.published_at).localeCompare(String(a.c.published_at))); }
+  function newsletterAudienceChangeFromCampaigns(range=selectedRange()) {
+    const campaigns=state.content
+      .filter((c)=>c.source==="mailchimp" && c.published_at)
+      .map((c)=>({c,date:new Date(c.published_at),sent:contentMetric(c,["emails_sent"])}))
+      .filter((x)=>!Number.isNaN(x.date.getTime()) && x.date<=range.end && x.sent>0)
+      .sort((a,b)=>a.date-b.date);
+    if(!campaigns.length)return null;
+    const end=campaigns[campaigns.length-1];
+    if(!range.start){
+      const start=campaigns[0];
+      return {value:end.sent-start.sent,start:start.sent,end:end.sent,startDate:start.date,endDate:end.date,note:"az első elérhető kampányhoz képest"};
+    }
+    const beforeStart=campaigns.filter((x)=>x.date<range.start).pop();
+    const firstInRange=campaigns.find((x)=>x.date>=range.start);
+    const start=beforeStart||firstInRange;
+    if(!start)return null;
+    return {value:end.sent-start.sent,start:start.sent,end:end.sent,startDate:start.date,endDate:end.date,note:beforeStart?"az időszak elejéhez képest":"az első időszaki kampányhoz képest"};
+  }
   function renderNewsletter() {
     const r=selectedRange(), p=previousRange(), rows=campaignRows(r), prevRows=p?campaignRows(p):[];
     const metricSum=(items,name)=>items.reduce((sum,item)=>sum+contentMetric(item.c,[name]),0);
@@ -393,9 +411,9 @@
     const pSent=metricSum(prevRows,"emails_sent"), pDelivered=metricSum(prevRows,"delivered"), pOpens=metricSum(prevRows,"unique_opens"), pClicks=metricSum(prevRows,"unique_clicks");
     const deliveryRate=sent?delivered/sent:0, openRate=delivered?opens/delivered:0, clickRate=delivered?clicks/delivered:0;
     const pDeliveryRate=pSent?pDelivered/pSent:0, pOpenRate=pDelivered?pOpens/pDelivered:0, pClickRate=pDelivered?pClicks/pDelivered:0;
-    const audienceNow=audience("mailchimp"), previousAudience=p?audienceAtEnd("mailchimp",p):0, audienceChange=audienceChangeForRange("mailchimp",r);
+    const audienceNow=audience("mailchimp"), previousAudience=p?audienceAtEnd("mailchimp",p):0, audienceChange=newsletterAudienceChangeFromCampaigns(r);
     const audienceGrowth=audienceChange?.value??null;
-    const audienceGrowthNote=audienceGrowth===null?"nincs snapshot az időszak kezdete előttről":r.start?"a kiválasztott időszak elejéhez képest":"az első elérhető snapshothoz képest";
+    const audienceGrowthNote=audienceChange?.note||"nincs használható kampányadat";
     pageContent.innerHTML=`<section class="kpi-grid">
       ${kpi("Aktuális feliratkozók",num(audienceNow),"Mailchimp listaállomány",p&&previousAudience?delta(audienceNow,previousAudience):undefined)}
       ${kpi("Feliratkozók változása",audienceGrowth===null?"–":`${audienceGrowth>0?"+":""}${num(audienceGrowth)}`,audienceGrowthNote)}
@@ -411,7 +429,7 @@
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">KAMPÁNYTREND</p><h2>Megnyitási és átkattintási arány</h2></div><span class="panel-note">egyedi címzettek / kézbesített levelek</span></div><div class="chart-wrap"><canvas id="mail-rate-chart"></canvas></div></article></section>
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">HAVI KIMUTATÁS</p><h2>Hírlevél-statisztika</h2></div><span class="panel-note">${num(rows.length)} kampány · oszlopfejlécre kattintva rendezhető</span></div><div class="table-wrap"><table id="newsletter-table" class="sortable-table"><thead><tr><th data-sort-type="date">Dátum</th><th data-sort-type="text">Cím</th><th class="num" data-sort-type="number">Kiküldve</th><th class="num" data-sort-type="number">Kézbesítve</th><th class="num" data-sort-type="number">Egyedi megnyitók</th><th class="num" data-sort-type="number">Egyedi kattintók</th><th class="num" data-sort-type="number">Visszapattanás</th><th class="num" data-sort-type="number">Leiratkozás</th><th>Legtöbbet kattintott link</th><th>Legsikeresebb Grandio-cikk</th></tr></thead><tbody>${rows.length?rows.map(({c,m})=>{
       const campaignSent=contentMetric(c,["emails_sent"]), campaignDelivered=contentMetric(c,["delivered"]), campaignOpens=contentMetric(c,["unique_opens"]), campaignClicks=contentMetric(c,["unique_clicks"]), campaignUnsub=contentMetric(c,["unsubscribes"]), campaignHard=contentMetric(c,["hard_bounces"]), campaignSoft=contentMetric(c,["soft_bounces"]), campaignBounce=campaignHard+campaignSoft;
-      return `<tr><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td data-sort-value="${esc(c.title||"")}"><a class="content-link" data-content="mailchimp|${esc(c.external_id)}" href="#">${esc(c.title)}</a><div class="metric-definition">${esc(m.subject_line||"")}</div></td><td class="num" data-sort-value="${campaignSent}">${num(campaignSent)}</td><td class="num" data-sort-value="${campaignDelivered}">${num(campaignDelivered)}<div class="metric-definition">${campaignSent?pct(campaignDelivered/campaignSent):"–"}</div></td><td class="num" data-sort-value="${campaignOpens}">${num(campaignOpens)}<div class="metric-definition">${campaignDelivered?pct(campaignOpens/campaignDelivered):"–"}</div></td><td class="num" data-sort-value="${campaignClicks}">${num(campaignClicks)}<div class="metric-definition">${campaignDelivered?pct(campaignClicks/campaignDelivered):"–"}</div></td><td class="num" data-sort-value="${campaignBounce}">${num(campaignBounce)}<div class="metric-definition">${campaignSent?pct(campaignBounce/campaignSent):"–"} · ${num(campaignHard)} hard / ${num(campaignSoft)} soft</div></td><td class="num" data-sort-value="${campaignUnsub}">${num(campaignUnsub)}<div class="metric-definition">${campaignDelivered?pct(campaignUnsub/campaignDelivered):"–"}</div></td><td>${m.top_link_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_link_url)}">${esc(clampText(m.top_link_url,55))}</a><div class="metric-definition">${num(m.top_link_unique_clicks||m.top_link_clicks)} egyedi kattintó</div>`:"–"}</td><td>${m.top_grandio_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_grandio_url)}">${esc(clampText(m.top_grandio_url,55))}</a><div class="metric-definition">${num(m.top_grandio_unique_clicks||m.top_grandio_clicks)} egyedi kattintó</div>`:"–"}</td></tr>`;
+      return `<tr><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td data-sort-value="${esc(c.title||"")}"><a class="content-link" data-content="mailchimp|${esc(c.external_id)}" href="#">${esc(c.title)}</a></td><td class="num" data-sort-value="${campaignSent}">${num(campaignSent)}</td><td class="num" data-sort-value="${campaignDelivered}">${num(campaignDelivered)}<div class="metric-definition">${campaignSent?pct(campaignDelivered/campaignSent):"–"}</div></td><td class="num" data-sort-value="${campaignOpens}">${num(campaignOpens)}<div class="metric-definition">${campaignDelivered?pct(campaignOpens/campaignDelivered):"–"}</div></td><td class="num" data-sort-value="${campaignClicks}">${num(campaignClicks)}<div class="metric-definition">${campaignDelivered?pct(campaignClicks/campaignDelivered):"–"}</div></td><td class="num" data-sort-value="${campaignBounce}">${num(campaignBounce)}<div class="metric-definition">${campaignSent?pct(campaignBounce/campaignSent):"–"} · ${num(campaignHard)} hard / ${num(campaignSoft)} soft</div></td><td class="num" data-sort-value="${campaignUnsub}">${num(campaignUnsub)}<div class="metric-definition">${campaignDelivered?pct(campaignUnsub/campaignDelivered):"–"}</div></td><td>${m.top_link_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_link_url)}">${esc(clampText(m.top_link_url,55))}</a><div class="metric-definition">${num(m.top_link_unique_clicks||m.top_link_clicks)} egyedi kattintó</div>`:"–"}</td><td>${m.top_grandio_url?`<a class="content-link" target="_blank" rel="noopener" href="${esc(m.top_grandio_url)}">${esc(clampText(m.top_grandio_url,55))}</a><div class="metric-definition">${num(m.top_grandio_unique_clicks||m.top_grandio_clicks)} egyedi kattintó</div>`:"–"}</td></tr>`;
     }).join(""):`<tr><td colspan="10"><div class="empty-state"><strong>Nincs kampány ebben az időszakban.</strong></div></td></tr>`}</tbody></table></div></article>`;
     const chronological=[...rows].reverse(), sentValues=chronological.map((x)=>contentMetric(x.c,["emails_sent"]));
     const sentMin=safeMin(sentValues,0), sentMax=safeMax(sentValues,0), sentPad=Math.max(10,Math.ceil((sentMax-sentMin)*.18),Math.ceil(sentMax*.025));
