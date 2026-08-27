@@ -230,6 +230,25 @@
     }
     return 0;
   }
+  function audienceChangeForRange(source, range=selectedRange()) {
+    const names=SOURCE[source]?.audience||[];
+    for (const name of names) {
+      const rows=state.metrics.filter((row)=>row.source===source && row.metric_name===name && String(row.content_external_id||"")==="" && row.aggregation_type==="snapshot")
+        .map((row)=>({date:new Date(row.metric_date),key:String(row.metric_date||""),value:Number(row.metric_value||0)}))
+        .filter((row)=>!Number.isNaN(row.date.getTime()) && row.date<=range.end)
+        .sort((a,b)=>a.date-b.date);
+      if(rows.length<2) continue;
+      const end=rows[rows.length-1];
+      if(!range.start) {
+        const start=rows[0];
+        return {value:end.value-start.value,start:start.value,end:end.value,coverageStart:start.date,complete:true};
+      }
+      const beforeStart=rows.filter((row)=>row.date<range.start).pop();
+      if(beforeStart) return {value:end.value-beforeStart.value,start:beforeStart.value,end:end.value,coverageStart:range.start,complete:true};
+      return null;
+    }
+    return null;
+  }
   function deltaHtml(value) { if (value === null || !Number.isFinite(value)) return `<span class="delta neutral">nincs összehasonlítás</span>`; const cls = value > .001 ? "up" : value < -.001 ? "down" : "neutral"; const arrow = value > .001 ? "↑" : value < -.001 ? "↓" : "→"; return `<span class="delta ${cls}">${arrow} ${pct(Math.abs(value))}</span>`; }
   function kpi(label, value, note = "", change = undefined) { return `<article class="kpi-card"><span class="kpi-label">${esc(label)}</span><strong>${esc(value)}</strong><small>${change === undefined ? esc(note) : `${deltaHtml(change)} · ${esc(note)}`}</small></article>`; }
 
@@ -269,14 +288,26 @@
   }
   function topContents(sources, limit=8, range=selectedRange()) { return scoredContents(sources,range).slice(0,limit); }
   function contentRowsHtml(items, options = {}) {
-    const showClicks=options.showClicks!==false;
-    const colCount=showClicks?7:6;
+    const showClicks=options.showClicks!==false, showAuthor=options.showAuthor===true;
+    const colCount=6+(showClicks?1:0)+(showAuthor?1:0);
     if (!items.length) return `<tr><td colspan="${colCount}"><div class="empty-state"><strong>Még nincs megjeleníthető tartalom.</strong>A csatorna bekötése után itt automatikusan megjelennek az adatok.</div></td></tr>`;
-    return items.map(({c,s})=>`<tr><td data-sort-value="${esc(c.title||"")}"><a href="#" class="content-link" data-content="${esc(c.source)}|${esc(c.external_id)}">${esc(clampText(c.title,90))}</a><div class="metric-definition">${esc(c.author||"")}</div></td><td data-sort-value="${esc(sourceLabel(c.source))}">${sourceBadge(c.source)}</td><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td class="num" data-sort-value="${Number(s.exposure||0)}">${num(s.exposure)}<div class="metric-definition">${esc(primaryMetricLabel(c.source))}</div></td>${showClicks?`<td class="num" data-sort-value="${Number(s.clicks||0)}">${num(s.clicks)}</td>`:""}<td class="num" data-sort-value="${Number(s.engagement||0)}">${num(s.engagement)}</td><td>${c.url?`<a class="content-link" href="${esc(c.url)}" target="_blank" rel="noopener">Megnyitás ↗</a>`:"–"}</td></tr>`).join("");
+    return items.map(({c,s})=>`<tr${showAuthor?` data-author="${esc(c.author||"Nincs szerzőadat")}"`:""}><td data-sort-value="${esc(c.title||"")}"><a href="#" class="content-link" data-content="${esc(c.source)}|${esc(c.external_id)}">${esc(clampText(c.title,90))}</a></td>${showAuthor?`<td data-sort-value="${esc(c.author||"Nincs szerzőadat")}">${esc(c.author||"Nincs szerzőadat")}</td>`:""}<td data-sort-value="${esc(sourceLabel(c.source))}">${sourceBadge(c.source)}</td><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td class="num" data-sort-value="${Number(s.exposure||0)}">${num(s.exposure)}<div class="metric-definition">${esc(primaryMetricLabel(c.source))}</div></td>${showClicks?`<td class="num" data-sort-value="${Number(s.clicks||0)}">${num(s.clicks)}</td>`:""}<td class="num" data-sort-value="${Number(s.engagement||0)}">${num(s.engagement)}</td><td>${c.url?`<a class="content-link" href="${esc(c.url)}" target="_blank" rel="noopener">Megnyitás ↗</a>`:"–"}</td></tr>`).join("");
   }
   function contentTable(items, title="Tartalmak", options = {}) {
-    const showClicks=options.showClicks!==false;
-    return `<article class="panel"><div class="panel-heading"><div><p class="eyebrow">TARTALOM</p><h2>${esc(title)}</h2></div><span class="panel-note">${num(items.length)} elem · oszlopfejlécre kattintva rendezhető</span></div><div class="table-wrap"><table class="sortable-table"><thead><tr><th data-sort-type="text">Tartalom</th><th data-sort-type="text">Csatorna</th><th data-sort-type="date">Dátum</th><th class="num" data-sort-type="number">Elsődleges eredmény</th>${showClicks?`<th class="num" data-sort-type="number">Kattintás</th>`:""}<th class="num" data-sort-type="number">Interakció</th><th>Link</th></tr></thead><tbody>${contentRowsHtml(items,options)}</tbody></table></div></article>`;
+    const showClicks=options.showClicks!==false, showAuthor=options.showAuthor===true, authorFilter=options.authorFilter===true;
+    const authorNames=showAuthor?[...new Set(items.map(({c})=>c.author||"Nincs szerzőadat"))].sort((a,b)=>a.localeCompare(b,"hu",{sensitivity:"base"})):[];
+    const filterHtml=authorFilter?`<details class="author-filter" id="blog-author-filter"><summary>Szerzők szűrése <span id="blog-author-filter-count">(${num(authorNames.length)} / ${num(authorNames.length)})</span></summary><div class="author-filter-actions"><button type="button" class="secondary-button" id="blog-author-all">Összes</button><button type="button" class="secondary-button" id="blog-author-none">Egyik sem</button></div><div class="author-filter-options">${authorNames.map((name)=>`<label><input type="checkbox" value="${esc(name)}" checked> <span>${esc(name)}</span></label>`).join("")}</div></details>`:"";
+    return `<article class="panel"><div class="panel-heading"><div><p class="eyebrow">TARTALOM</p><h2>${esc(title)}</h2></div><span class="panel-note">${authorFilter?`<span id="blog-content-visible-count">${num(items.length)}</span> / `:""}${num(items.length)} elem · oszlopfejlécre kattintva rendezhető</span></div>${filterHtml}<div class="table-wrap"><table class="sortable-table${authorFilter?" blog-content-table":""}"><thead><tr><th data-sort-type="text">Tartalom</th>${showAuthor?`<th data-sort-type="text">Szerző</th>`:""}<th data-sort-type="text">Csatorna</th><th data-sort-type="date">Dátum</th><th class="num" data-sort-type="number">Elsődleges eredmény</th>${showClicks?`<th class="num" data-sort-type="number">Kattintás</th>`:""}<th class="num" data-sort-type="number">Interakció</th><th>Link</th></tr></thead><tbody>${contentRowsHtml(items,options)}</tbody></table></div></article>`;
+  }
+  function bindBlogAuthorFilter() {
+    const details=$("blog-author-filter"), table=document.querySelector(".blog-content-table");
+    if(!details||!table)return;
+    const boxes=[...details.querySelectorAll('input[type="checkbox"]')], count=$("blog-author-filter-count"), visible=$("blog-content-visible-count");
+    const apply=()=>{const selected=new Set(boxes.filter((box)=>box.checked).map((box)=>box.value));let shown=0;[...table.tBodies[0].rows].forEach((row)=>{const show=selected.has(row.dataset.author||"");row.hidden=!show;if(show)shown++;});if(count)count.textContent=`(${selected.size} / ${boxes.length})`;if(visible)visible.textContent=num(shown);};
+    boxes.forEach((box)=>box.addEventListener("change",apply));
+    $("blog-author-all")?.addEventListener("click",()=>{boxes.forEach((box)=>box.checked=true);apply();});
+    $("blog-author-none")?.addEventListener("click",()=>{boxes.forEach((box)=>box.checked=false);apply();});
+    apply();
   }
 
   function sortableValue(cell, type) {
@@ -362,12 +393,12 @@
     const pSent=metricSum(prevRows,"emails_sent"), pDelivered=metricSum(prevRows,"delivered"), pOpens=metricSum(prevRows,"unique_opens"), pClicks=metricSum(prevRows,"unique_clicks");
     const deliveryRate=sent?delivered/sent:0, openRate=delivered?opens/delivered:0, clickRate=delivered?clicks/delivered:0;
     const pDeliveryRate=pSent?pDelivered/pSent:0, pOpenRate=pDelivered?pOpens/pDelivered:0, pClickRate=pDelivered?pClicks/pDelivered:0;
-    const audienceNow=audience("mailchimp"), previousAudience=p?audienceAtEnd("mailchimp",p):0, audienceHistory=snapshotSeries("mailchimp",SOURCE.mailchimp.audience,r);
-    const audienceStart=audienceHistory.values.length?audienceHistory.values[0]:audienceNow, audienceEnd=audienceHistory.values.length?audienceHistory.values[audienceHistory.values.length-1]:audienceNow;
-    const audienceGrowth=audienceHistory.values.length>1?audienceEnd-audienceStart:null;
+    const audienceNow=audience("mailchimp"), previousAudience=p?audienceAtEnd("mailchimp",p):0, audienceChange=audienceChangeForRange("mailchimp",r);
+    const audienceGrowth=audienceChange?.value??null;
+    const audienceGrowthNote=audienceGrowth===null?"nincs snapshot az időszak kezdete előttről":r.start?"a kiválasztott időszak elejéhez képest":"az első elérhető snapshothoz képest";
     pageContent.innerHTML=`<section class="kpi-grid">
       ${kpi("Aktuális feliratkozók",num(audienceNow),"Mailchimp listaállomány",p&&previousAudience?delta(audienceNow,previousAudience):undefined)}
-      ${kpi("Feliratkozók változása",audienceGrowth===null?"–":`${audienceGrowth>0?"+":""}${num(audienceGrowth)}`,audienceGrowth===null?"a napi mentésekkel válik mérhetővé":"az időszak elejéhez képest")}
+      ${kpi("Feliratkozók változása",audienceGrowth===null?"–":`${audienceGrowth>0?"+":""}${num(audienceGrowth)}`,audienceGrowthNote)}
       ${kpi("Kiküldve",num(sent),`${num(rows.length)} kampány`,p?delta(sent,pSent):undefined)}
       ${kpi("Kézbesítve",num(delivered),sent?`${pct(deliveryRate)} kézbesítési arány`:"–",p?delta(delivered,pDelivered):undefined)}
       ${kpi("Egyedi megnyitók",num(opens),"legalább egyszer megnyitó címzettek",p?delta(opens,pOpens):undefined)}
@@ -390,16 +421,17 @@
 
   function renderBlog() {
     const r=selectedRange(),p=previousRange();
-    const views=sourceMetric("blog","exposure",r),sessions=accountMetricTotal("blog",["web_sessions"],r),users=accountMetricTotal("blog",["web_users"],r),engaged=accountMetricTotal("blog",["web_engaged_sessions"],r),seconds=accountMetricTotal("blog",["web_engagement_seconds"],r),search=accountMetricTotal("blog",["search_clicks"],r),pub=contents(["blog"],r).length;
-    const prevViews=p?sourceMetric("blog","exposure",p):0,prevSessions=p?accountMetricTotal("blog",["web_sessions"],p):0,prevUsers=p?accountMetricTotal("blog",["web_users"],p):0,prevEngaged=p?accountMetricTotal("blog",["web_engaged_sessions"],p):0,prevSeconds=p?accountMetricTotal("blog",["web_engagement_seconds"],p):0,prevSearch=p?accountMetricTotal("blog",["search_clicks"],p):0;
+    const views=sourceMetric("blog","exposure",r),sessions=accountMetricTotal("blog",["web_sessions"],r),users=accountMetricTotal("blog",["web_users"],r),engaged=accountMetricTotal("blog",["web_engaged_sessions"],r),seconds=accountMetricTotal("blog",["web_engagement_seconds"],r),pub=contents(["blog"],r).length;
+    const prevViews=p?sourceMetric("blog","exposure",p):0,prevSessions=p?accountMetricTotal("blog",["web_sessions"],p):0,prevUsers=p?accountMetricTotal("blog",["web_users"],p):0,prevEngaged=p?accountMetricTotal("blog",["web_engaged_sessions"],p):0,prevSeconds=p?accountMetricTotal("blog",["web_engagement_seconds"],p):0;
     const avgEngagement=users?seconds/users:0,prevAvgEngagement=prevUsers?prevSeconds/prevUsers:0,items=scoredContents(["blog"],r);
-    pageContent.innerHTML=`<section class="kpi-grid six">${kpi("Oldalmegtekintések",num(views),"GA4",p?delta(views,prevViews):undefined)}${kpi("Munkamenetek",num(sessions),"GA4",p?delta(sessions,prevSessions):undefined)}${kpi("Felhasználók",num(users),"aktív felhasználók",p?delta(users,prevUsers):undefined)}${kpi("Elkötelezett munkamenetek",num(engaged),sessions?pct(engaged/sessions):"–",p?delta(engaged,prevEngaged):undefined)}${kpi("Átlagos engagement",users?`${num(avgEngagement)} mp`:"–","felhasználónként",p&&prevAvgEngagement?delta(avgEngagement,prevAvgEngagement):undefined)}${kpi("Google-kattintások",num(search),`${num(pub)} publikált cikk`,p?delta(search,prevSearch):undefined)}</section>
-    <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORGALMI TREND</p><h2>Blogmegtekintések</h2></div><span class="panel-note">napi érték + 7 és 28 napos mozgóátlag</span></div><div class="chart-wrap"><canvas id="blog-trend"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">SZERZŐK</p><h2>Teljesítmény szerzőnként</h2></div><span class="panel-note">a Grandio Blogon megjelenő szerzőnév alapján</span></div><div id="author-rank" class="rank-list"></div></article></section>
-    ${contentTable(items,"Összes Grandio-cikk",{showClicks:false})}`;
+    pageContent.innerHTML=`<section class="kpi-grid five">${kpi("Oldalmegtekintések",num(views),"GA4",p?delta(views,prevViews):undefined)}${kpi("Munkamenetek",num(sessions),"GA4",p?delta(sessions,prevSessions):undefined)}${kpi("Felhasználók",num(users),"aktív felhasználók",p?delta(users,prevUsers):undefined)}${kpi("Elkötelezett munkamenetek",num(engaged),sessions?pct(engaged/sessions):"–",p?delta(engaged,prevEngaged):undefined)}${kpi("Átlagos engagement",users?`${num(avgEngagement)} mp`:"–","felhasználónként",p&&prevAvgEngagement?delta(avgEngagement,prevAvgEngagement):undefined)}</section>
+    <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORGALMI TREND</p><h2>Blogmegtekintések</h2></div><span class="panel-note">napi érték + 7 és 28 napos mozgóátlag</span></div><div class="chart-wrap"><canvas id="blog-trend"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">SZERZŐK</p><h2>Teljesítmény szerzőnként</h2></div><span class="panel-note">a Grandio Blogon megjelenő szerzőnév alapján</span></div><div id="author-rank" class="rank-list author-rank-scroll"></div></article></section>
+    ${contentTable(items,"Összes Grandio-cikk",{showClicks:false,showAuthor:true,authorFilter:true})}`;
     const series=dailySeries("blog","exposure",r); lineChart("blog-trend",series.labels,[{label:"Megtekintések",data:series.values,borderColor:"rgba(10,75,85,.3)",backgroundColor:"rgba(10,75,85,.06)",fill:true,pointRadius:0},{label:"7 napos átlag",data:movingAverage(series.values,7),borderColor:"#0a4b55",pointRadius:0,tension:.25,borderWidth:2},{label:"28 napos átlag",data:movingAverage(series.values,28),borderColor:"#2de68c",pointRadius:0,tension:.25,borderWidth:2}]);
     const authors={}; contents(["blog"],r).forEach((c)=>{const a=c.author||"Nincs szerzőadat";authors[a]??={count:0,views:0};authors[a].count++;authors[a].views+=contentMetric(c,["web_views"]);});
     const ar=Object.entries(authors).map(([name,v])=>({name,...v})).sort((a,b)=>b.views-a.views),max=safeMax(ar.map((x)=>x.views),1)||1;
     $("author-rank").innerHTML=ar.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} cikk · ${num(x.count?x.views/x.count:0)} átlagos megtekintés</small><div class="progress"><span style="width:${x.views/max*100}%"></span></div></div><span class="rank-value">${num(x.views)}</span></div>`).join("")||`<div class="empty-state">Még nincs szerzőhöz kapcsolható forgalmi adat.</div>`;
+    bindBlogAuthorFilter();
   }
 
   function renderLinkedInCompany() {
