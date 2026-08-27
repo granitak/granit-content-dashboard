@@ -31,3 +31,17 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .observer-summary{max-width:720px;min-width:360px;margin:8px 0 0;line-height:1.6;color:var(--ink-soft);white-space:normal;word-break:normal;overflow-wrap:break-word}
 .observer-depth{min-width:180px;max-width:340px;line-height:1.55;white-space:normal!important;word-break:normal;overflow-wrap:break-word}
 .rank-list{max-height:none;overflow:visible}
+
+
+/* 2026-08-27 refinement: compact Observer layout */
+.entity-panel{min-height:0}
+.entity-rank-scroll{max-height:330px;overflow-y:auto;overflow-x:hidden;padding-right:6px;overscroll-behavior:contain}
+.observer-table-wrap{overflow-x:hidden}
+.observer-table{width:100%;min-width:0!important;table-layout:fixed;font-size:11px}
+.observer-table col.obs-date{width:8%}.observer-table col.obs-title{width:34%}.observer-table col.obs-source{width:11%}.observer-table col.obs-entity{width:14%}.observer-table col.obs-depth{width:18%}.observer-table col.obs-count{width:9%}.observer-table col.obs-priority{width:6%}
+.observer-table th,.observer-table td{padding:9px 7px;white-space:normal;overflow-wrap:anywhere;word-break:normal}
+.observer-summary{max-width:none!important;min-width:0!important;margin:7px 0 0;line-height:1.5;white-space:normal;overflow-wrap:anywhere}
+.observer-depth{min-width:0!important;max-width:none!important;line-height:1.45;overflow-wrap:anywhere}
+.observer-source-link{white-space:normal;overflow-wrap:anywhere}
+.observer-tags{gap:3px}.observer-tags .tag{white-space:normal;padding:3px 5px}
+@media(max-width:1100px){.observer-table{font-size:10px}.observer-table th,.observer-table td{padding:7px 5px}.observer-table col.obs-title{width:32%}.observer-table col.obs-depth{width:20%}}
