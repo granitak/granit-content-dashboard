@@ -52,7 +52,7 @@
   function pct(value, digits = 1) { return `${new Intl.NumberFormat("hu-HU", { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(Number(value || 0) * 100)}%`; }
   function dateHU(value) { if (!value) return "–"; const d = new Date(value); return Number.isNaN(d.getTime()) ? "–" : new Intl.DateTimeFormat("hu-HU", { year:"numeric", month:"2-digit", day:"2-digit" }).format(d); }
   function dateTimeHU(value) { if (!value) return "–"; const d = new Date(value); return Number.isNaN(d.getTime()) ? "–" : new Intl.DateTimeFormat("hu-HU", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }).format(d); }
-  function dayKey(value) { const d = new Date(value); return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10); }
+  function dayKey(value) { const d = new Date(value); if (Number.isNaN(d.getTime())) return ""; const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; }
   function clampText(value, max = 110) { const text = String(value || "").trim(); return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
   function cleanDisplayText(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
   function sourceLabel(source) { return SOURCE[source]?.label || source || "Ismeretlen"; }
@@ -197,6 +197,36 @@
     });
     return {labels:dates.map((d)=>dateHU(d)),values:dates.map((d)=>map[d]),dates};
   }
+  function rangeWithLookback(range, days = 0) {
+    if (!range?.start || !days) return range;
+    const start = new Date(range.start);
+    start.setDate(start.getDate() - days);
+    start.setHours(0,0,0,0);
+    return { ...range, start, days: range.days ? range.days + days : null };
+  }
+  function trimSeries(series, range) {
+    if (!range?.start) return series;
+    const keep = (series.dates || []).map((d)=>inRange(d,range));
+    return {
+      labels: (series.labels || []).filter((_,i)=>keep[i]),
+      values: (series.values || []).filter((_,i)=>keep[i]),
+      dates: (series.dates || []).filter((_,i)=>keep[i]),
+    };
+  }
+  function seriesWithMovingAverages(builder, range, windows = []) {
+    const maxWindow = Math.max(1, ...windows.map((w)=>Number(w)||1));
+    const expanded = rangeWithLookback(range, maxWindow - 1);
+    const full = builder(expanded);
+    const averages = Object.fromEntries(windows.map((w)=>[w,movingAverage(full.values,w)]));
+    if (!range?.start) return { ...full, averages };
+    const keep = (full.dates || []).map((d)=>inRange(d,range));
+    return {
+      labels: (full.labels || []).filter((_,i)=>keep[i]),
+      values: (full.values || []).filter((_,i)=>keep[i]),
+      dates: (full.dates || []).filter((_,i)=>keep[i]),
+      averages: Object.fromEntries(windows.map((w)=>[w,(averages[w]||[]).filter((_,i)=>keep[i])])),
+    };
+  }
 
   function contentStats(c) {
     const sc = SOURCE[c.source] || { exposure:[], clicks:[], engagement:[] };
@@ -251,7 +281,7 @@
   function deltaHtml(value) { if (value === null || !Number.isFinite(value)) return `<span class="delta neutral">nincs összehasonlítás</span>`; const cls = value > .001 ? "up" : value < -.001 ? "down" : "neutral"; const arrow = value > .001 ? "↑" : value < -.001 ? "↓" : "→"; return `<span class="delta ${cls}">${arrow} ${pct(Math.abs(value))}</span>`; }
   function kpi(label, value, note = "", change = undefined) { return `<article class="kpi-card"><span class="kpi-label">${esc(label)}</span><strong>${esc(value)}</strong><small>${change === undefined ? esc(note) : `${deltaHtml(change)} · ${esc(note)}`}</small></article>`; }
 
-  function allDates(range = selectedRange(), maxDays = 370) {
+  function allDates(range = selectedRange(), maxDays = 760) {
     let start = range.start ? new Date(range.start) : null;
     if (!start) {
       let earliest = Infinity;
@@ -263,17 +293,25 @@
   }
   function dailySeries(source, kind, range = selectedRange()) {
     const dates = allDates(range); const map = Object.fromEntries(dates.map((d)=>[d,0])); const sc = SOURCE[source];
-    if (!sc) return { labels: dates, values: dates.map(()=>0) };
-    if (kind === "publishing") { contents([source], range).forEach((c)=>{const d=dayKey(c.published_at); if(d in map)map[d]++;}); return {labels:dates,values:dates.map(d=>map[d])}; }
-    const names = kind === "exposure" ? sc.exposure : kind === "clicks" ? sc.clicks : sc.engagement;
-    const accountRows = state.metrics.filter((m)=>m.source===source && !m.content_external_id && names.includes(m.metric_name) && m.aggregation_type==="flow" && inRange(m.metric_date,range));
-    if (accountRows.length) {
-      const selectedNames = kind === "engagement" ? names : [names.find((n)=>accountRows.some((r)=>r.metric_name===n))].filter(Boolean);
-      accountRows.filter((r)=>selectedNames.includes(r.metric_name)).forEach((r)=>{if(r.metric_date in map)map[r.metric_date]+=Number(r.metric_value||0);});
-    } else {
-      contents([source],range).forEach((c)=>{const d=dayKey(c.published_at);if(!(d in map))return;map[d]+=kind==="engagement"?names.reduce((s,n)=>s+contentMetric(c,[n]),0):contentMetric(c,names);});
+    if (!sc) return { labels: dates.map((d)=>dateHU(d)), values: dates.map(()=>0), dates };
+    if (kind === "publishing") {
+      contents([source], range).forEach((c)=>{const d=dayKey(c.published_at); if(d in map)map[d]++;});
+      return {labels:dates.map((d)=>dateHU(d)),values:dates.map((d)=>map[d]),dates};
     }
-    return { labels: dates, values: dates.map((d)=>map[d]) };
+    const names = kind === "exposure" ? sc.exposure : kind === "clicks" ? sc.clicks : sc.engagement;
+    const flowRows = state.metrics.filter((m)=>m.source===source && names.includes(m.metric_name) && m.aggregation_type==="flow" && inRange(m.metric_date,range));
+    const accountRows = flowRows.filter((m)=>!m.content_external_id);
+    const sourceRows = accountRows.length ? accountRows : flowRows;
+    if (sourceRows.length) {
+      const selectedNames = kind === "engagement" ? names : [names.find((n)=>sourceRows.some((r)=>r.metric_name===n))].filter(Boolean);
+      sourceRows.filter((r)=>selectedNames.includes(r.metric_name)).forEach((r)=>{
+        const d=dayKey(r.metric_date);
+        if(d in map) map[d]+=Number(r.metric_value||0);
+      });
+    } else {
+      contents([source],range).forEach((c)=>{const d=dayKey(c.published_at);if(!(d in map))return;map[d]+=kind==="engagement"?names.reduce((sum,n)=>sum+contentMetric(c,[n]),0):contentMetric(c,names);});
+    }
+    return { labels: dates.map((d)=>dateHU(d)), values: dates.map((d)=>map[d]), dates };
   }
   function movingAverage(values, window) { return values.map((_,i)=>{const start=Math.max(0,i-window+1);const part=values.slice(start,i+1);return part.reduce((a,b)=>a+b,0)/part.length;}); }
   function destroyCharts(){ state.charts.forEach((c)=>c.destroy()); state.charts=[]; }
@@ -508,7 +546,7 @@
     pageContent.innerHTML=`<section class="kpi-grid five">${kpi("Oldalmegtekintések",num(views),"GA4",p?delta(views,prevViews):undefined)}${kpi("Munkamenetek",num(sessions),"GA4",p?delta(sessions,prevSessions):undefined)}${kpi("Felhasználók",num(users),"aktív felhasználók",p?delta(users,prevUsers):undefined)}${kpi("Elkötelezett munkamenetek",num(engaged),sessions?pct(engaged/sessions):"–",p?delta(engaged,prevEngaged):undefined)}${kpi("Átlagos engagement",users?`${num(avgEngagement)} mp`:"–","felhasználónként",p&&prevAvgEngagement?delta(avgEngagement,prevAvgEngagement):undefined)}</section>
     <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORGALMI TREND</p><h2>Blogmegtekintések</h2></div><span class="panel-note">napi érték + 7 és 28 napos mozgóátlag</span></div><div class="chart-wrap"><canvas id="blog-trend"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">SZERZŐK</p><h2>Teljesítmény szerzőnként</h2></div><span class="panel-note">a Grandio Blogon megjelenő szerzőnév alapján</span></div><div id="author-rank" class="rank-list author-rank-scroll"></div></article></section>
     ${contentTable(items,"Összes Grandio-cikk",{showClicks:false,showAuthor:true,authorFilter:true})}`;
-    const series=dailySeries("blog","exposure",r); lineChart("blog-trend",series.labels,[{label:"Megtekintések",data:series.values,borderColor:"rgba(10,75,85,.3)",backgroundColor:"rgba(10,75,85,.06)",fill:true,pointRadius:0},{label:"7 napos átlag",data:movingAverage(series.values,7),borderColor:"#0a4b55",pointRadius:0,tension:.25,borderWidth:2},{label:"28 napos átlag",data:movingAverage(series.values,28),borderColor:"#2de68c",pointRadius:0,tension:.25,borderWidth:2}]);
+    const series=seriesWithMovingAverages((range)=>dailySeries("blog","exposure",range),r,[7,28]); lineChart("blog-trend",series.labels,[{label:"Megtekintések",data:series.values,borderColor:"rgba(10,75,85,.3)",backgroundColor:"rgba(10,75,85,.06)",fill:true,pointRadius:0},{label:"7 napos átlag",data:series.averages[7],borderColor:"#0a4b55",pointRadius:0,tension:.25,borderWidth:2},{label:"28 napos átlag",data:series.averages[28],borderColor:"#2de68c",pointRadius:0,tension:.25,borderWidth:2}]);
     const authors={}; contents(["blog"],r).forEach((c)=>{const a=c.author||"Nincs szerzőadat";authors[a]??={count:0,views:0};authors[a].count++;authors[a].views+=contentMetric(c,["web_views"]);});
     const ar=Object.entries(authors).map(([name,v])=>({name,...v})).sort((a,b)=>b.views-a.views),max=safeMax(ar.map((x)=>x.views),1)||1;
     $("author-rank").innerHTML=ar.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} cikk · ${num(x.count?x.views/x.count:0)} átlagos megtekintés</small><div class="progress"><span style="width:${x.views/max*100}%"></span></div></div><span class="rank-value">${num(x.views)}</span></div>`).join("")||`<div class="empty-state">Még nincs szerzőhöz kapcsolható forgalmi adat.</div>`;
@@ -526,7 +564,7 @@
     <section class="kpi-grid six" style="margin-top:15px">${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás",p?delta(clicks,prevClicks):undefined)}${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`,p?delta(interactions,prevInteractions):undefined)}${kpi("Követők",followersNow?num(followersNow,true):"–",followersNow?"aktuális exportált állomány":"még nincs követő-snapshot",p&&prevAudience?delta(followersNow,prevAudience):undefined)}${kpi("Új követők",num(followersGained,true),rangeLabel(),p?delta(followersGained,prevFollowersGained):undefined)}${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}</section>
     <section class="grid-2" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐNÖVEKEDÉS</p><h2>Új követők alakulása</h2></div><span class="panel-note">napi új követők + 28 napos átlag</span></div><div class="chart-wrap"><canvas id="linkedin-followers-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">OLDALLÁTOGATOTTSÁG</p><h2>LinkedIn-oldal látogatói</h2></div><span class="panel-note">oldalmegtekintések és egyedi látogatók</span></div><div class="chart-wrap"><canvas id="linkedin-visitors-chart"></canvas></div></article></section>
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">TARTALMI TELJESÍTMÉNY</p><h2>Megjelenések és kattintások</h2></div><span class="panel-note">napi organikus + szponzorált összesen</span></div><div class="chart-wrap"><canvas id="linkedin-performance-chart"></canvas></div></article>${contentTable(items,"LinkedIn – összes poszt")}`;
-    const followerSeries=accountFlowSeries(source,["followers_gained"],r); chart("linkedin-followers-chart",{type:"bar",data:{labels:followerSeries.labels,datasets:[{type:"bar",label:"Új követők",data:followerSeries.values,backgroundColor:"rgba(40,103,178,.28)",borderColor:"#2867b2",borderWidth:1,borderRadius:5},{type:"line",label:"28 napos átlag",data:movingAverage(followerSeries.values,28),borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.3,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+    const followerSeries=seriesWithMovingAverages((range)=>accountFlowSeries(source,["followers_gained"],range),r,[28]); chart("linkedin-followers-chart",{type:"bar",data:{labels:followerSeries.labels,datasets:[{type:"bar",label:"Új követők",data:followerSeries.values,backgroundColor:"rgba(40,103,178,.28)",borderColor:"#2867b2",borderWidth:1,borderRadius:5},{type:"line",label:"28 napos átlag",data:followerSeries.averages[28],borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.3,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
     const visitorSeries=accountFlowSeries(source,["unique_visitors"],r), pageViewSeries=accountFlowSeries(source,["page_views"],r); lineChart("linkedin-visitors-chart",visitorSeries.labels,[{label:"Egyedi látogatók",data:visitorSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Oldalmegtekintések",data:pageViewSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
     const impressionSeries=accountFlowSeries(source,["impressions"],r), clickSeries=accountFlowSeries(source,["clicks"],r); lineChart("linkedin-performance-chart",impressionSeries.labels,[{label:"Megjelenések",data:impressionSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Kattintások",data:clickSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
   }
@@ -553,7 +591,7 @@
     const trendPanel=`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">TELJESÍTMÉNYTREND</p><h2>${esc(SOURCE[source].short)} – fő mutató</h2></div><span class="panel-note">napi érték + mozgóátlagok</span></div><div class="chart-wrap"><canvas id="platform-trend"></canvas></div></article>`;
     const formatPanel=showFormats?`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORMÁTUMOK</p><h2>Tartalomtípusok eredménye</h2></div></div><div id="format-rank" class="rank-list"></div></article>`:"";
     pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Ez a csatorna még nincs bekötve.</strong><p>Az adatkapcsolat beállítása után az adatok automatikusan megjelennek.</p></div>`:""}<section class="kpi-grid six" style="margin-top:${connected?0:15}px">${cards}</section>${showFormats?`<section class="grid-2" style="margin-top:15px">${trendPanel}${formatPanel}</section>`:`<div style="margin-top:15px;margin-bottom:15px">${trendPanel}</div>`}${contentTable(items,`${SOURCE[source].label} – összes tartalom`,{showClicks:source!=="instagram"})}`;
-    const series=dailySeries(source,"exposure",r); lineChart("platform-trend",series.labels,[{label:"Napi érték",data:series.values,borderColor:`${SOURCE[source].color}55`,backgroundColor:`${SOURCE[source].color}12`,fill:true,pointRadius:0},{label:"7 napos átlag",data:movingAverage(series.values,7),borderColor:SOURCE[source].color,pointRadius:0,tension:.25},{label:"28 napos átlag",data:movingAverage(series.values,28),borderColor:"#2de68c",pointRadius:0,tension:.25}]);
+    const series=seriesWithMovingAverages((range)=>dailySeries(source,"exposure",range),r,[7,28]); lineChart("platform-trend",series.labels,[{label:"Napi érték",data:series.values,borderColor:`${SOURCE[source].color}55`,backgroundColor:`${SOURCE[source].color}12`,fill:true,pointRadius:0},{label:"7 napos átlag",data:series.averages[7],borderColor:SOURCE[source].color,pointRadius:0,tension:.25},{label:"28 napos átlag",data:series.averages[28],borderColor:"#2de68c",pointRadius:0,tension:.25}]);
     if(showFormats){const formats={}; contents([source],r).forEach((c)=>{const f=(c.content_type||"tartalom").toLowerCase();formats[f]??={count:0,exp:0};formats[f].count++;formats[f].exp+=contentStats(c).exposure;}); const rows=Object.entries(formats).map(([name,x])=>({name,...x})).sort((a,b)=>b.exp-a.exp),max=safeMax(rows.map((x)=>x.exp),1)||1; $("format-rank").innerHTML=rows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} tartalom</small><div class="progress"><span style="width:${x.exp/max*100}%"></span></div></div><span class="rank-value">${num(x.exp,true)}</span></div>`).join("")||`<div class="empty-state">Még nincs formátumadat.</div>`;}
   }
 
@@ -588,7 +626,7 @@
     pageContent.innerHTML=`<section class="kpi-grid">${kpi("Médiatörténetek",num(filtered.length),"külön feldolgozott cikkek",p?delta(filtered.length,prevFiltered.length):undefined)}${kpi("Sajtómegjelenések",num(mentions),"elsődleges + hasonló megjelenések",p?delta(mentions,prevMentions):undefined)}${kpi("Különböző források",num(sources.size),"felismert médiadomének",p?delta(sources.size,prevSources.size):undefined)}${kpi("Interjúk / megszólalások",num(interviews),`${num(high)} magas prioritású történet`,p?delta(interviews,prevInterviews):undefined)}</section>
     <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">MÉDIATREND</p><h2>Megjelenések időben</h2></div></div><div class="chart-wrap"><canvas id="observer-trend"></canvas></div></article><article class="panel entity-panel"><div class="panel-heading"><div><p class="eyebrow">ÉRINTETT ENTITÁSOK</p><h2>Márkák, alapok, projektek és személyek</h2></div><span class="panel-note">görgethető teljes lista</span></div><div id="entity-rank" class="rank-list entity-rank-scroll"></div></article></section>
     <article class="panel"><div class="panel-heading"><div><p class="eyebrow">SAJTÓADATBÁZIS</p><h2>Minden médiatörténet</h2></div><div class="table-tools"><input id="observer-search" type="search" placeholder="Keresés címben, összefoglalóban…"><select id="observer-type"><option value="all">Minden típus</option><option value="interjú">Interjú / megszólalás</option><option value="high">Magas prioritás</option></select></div></div><div class="table-wrap observer-table-wrap"><table id="observer-table" class="sortable-table observer-table"><colgroup><col class="obs-date"><col class="obs-title"><col class="obs-source"><col class="obs-entity"><col class="obs-depth"><col class="obs-count"><col class="obs-priority"></colgroup><thead><tr><th data-sort-type="date">Dátum</th><th data-sort-type="text">Cím és ismertetés</th><th data-sort-type="text">Forrás</th><th data-sort-type="text">Érintett entitás</th><th data-sort-type="text">Megjelenítés mélysége</th><th class="num" data-sort-type="number">Megjelenések</th><th data-sort-type="number">Prioritás</th></tr></thead><tbody id="observer-body"></tbody></table></div><p id="observer-count" class="metric-definition"></p></article>`;
-    const series=dailySeries("observer","exposure",r); lineChart("observer-trend",series.labels,[{label:"Megjelenések",data:series.values,borderColor:"#b54708",backgroundColor:"rgba(181,71,8,.08)",fill:true,pointRadius:0,tension:.25},{label:"7 napos átlag",data:movingAverage(series.values,7),borderColor:"#0a4b55",pointRadius:0,tension:.25}]);
+    const series=seriesWithMovingAverages((range)=>dailySeries("observer","exposure",range),r,[7]); lineChart("observer-trend",series.labels,[{label:"Megjelenések",data:series.values,borderColor:"#b54708",backgroundColor:"rgba(181,71,8,.08)",fill:true,pointRadius:0,tension:.25},{label:"7 napos átlag",data:series.averages[7],borderColor:"#0a4b55",pointRadius:0,tension:.25}]);
     const max=safeMax(topEntities.map((x)=>x[1]),1)||1; $("entity-rank").innerHTML=topEntities.map(([name,v],i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(name)}<div class="progress"><span style="width:${v/max*100}%"></span></div></div><span class="rank-value">${num(v)}</span></div>`).join("")||`<div class="empty-state">Még nincs felismert entitás.</div>`;
     const update=()=>{const q=$("observer-search").value.trim().toLocaleLowerCase("hu"),type=$("observer-type").value;let rows=filtered.filter((x)=>{const hay=`${x.c.title} ${x.c.body} ${x.m.primary_source} ${x.m.depth} ${(x.m.entities||[]).join(" ")}`.toLocaleLowerCase("hu");if(q&&!hay.includes(q))return false;if(type==="interjú"&&!/interjú|nyilatkozat|megszólal/i.test(`${x.m.depth} ${x.m.mention_type}`))return false;if(type==="high"&&Number(x.m.priority||0)<4)return false;return true;});
       $("observer-body").innerHTML=rows.map((x)=>{const summary=cleanDisplayText(x.c.body),depth=cleanDisplayText(x.m.depth||x.m.mention_type||"–"),source=x.m.primary_source||x.c.author||"–",entitiesText=(x.m.entities||[]).join(" ");return `<tr><td data-sort-value="${esc(x.c.published_at||"")}">${dateHU(x.c.published_at)}</td><td data-sort-value="${esc(x.c.title||"")}"><a href="#" data-content="observer|${esc(x.c.external_id)}" class="content-link">${esc(x.c.title)}</a>${summary?`<p class="observer-summary">${esc(summary)}</p>`:""}</td><td data-sort-value="${esc(source)}">${x.c.url?`<a class="content-link observer-source-link" target="_blank" rel="noopener" href="${esc(x.c.url)}">${esc(source)} ↗</a>`:esc(source)}</td><td data-sort-value="${esc(entitiesText)}"><div class="tags observer-tags">${(x.m.entities||[]).map((e)=>`<span class="tag">${esc(e)}</span>`).join("")||"–"}</div></td><td class="observer-depth" data-sort-value="${esc(depth)}">${esc(depth)}</td><td class="num" data-sort-value="${Number(x.mentions||0)}">${num(x.mentions)}</td><td data-sort-value="${Number(x.m.priority||2)}"><span class="priority p${Number(x.m.priority||2)}">${Number(x.m.priority||2)}</span></td></tr>`;}).join("")||`<tr><td colspan="7"><div class="empty-state">Nincs megfelelő találat.</div></td></tr>`;
