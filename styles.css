@@ -90,3 +90,8 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .text-button:hover{text-decoration:underline}
 @media(max-width:1050px){.briefing-grid{grid-template-columns:1fr}.overview-grid{grid-template-columns:1fr}}
 @media(max-width:600px){.overview-channel-row{grid-template-columns:8px 1fr auto 18px}.overview-channel-delta{display:none}.overview-channel-value{min-width:88px}.briefing-card{grid-template-columns:32px 1fr;padding:15px}.briefing-icon{width:30px;height:30px}}
+
+/* 2026-09-04 data coverage + story topic layout */
+.story-topic-grid{align-items:start}
+.topic-rank-panel{min-height:0}
+.topic-rank-scroll{max-height:330px;overflow-y:auto;overflow-x:hidden;padding-right:6px;overscroll-behavior:contain}

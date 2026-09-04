@@ -86,6 +86,46 @@
   function previousRange() { if (compareSelect.value === "none") return null; const current = selectedRange(); if (!current.start || !current.days) return null; const end = new Date(current.start); end.setDate(end.getDate() - 1); end.setHours(23,59,59,999); const start = new Date(end); start.setDate(start.getDate() - current.days + 1); start.setHours(0,0,0,0); return { start, end, days: current.days }; }
   function inRange(value, range = selectedRange()) { if (!value) return false; const d = new Date(value); if (Number.isNaN(d.getTime())) return false; return (!range.start || d >= range.start) && d <= range.end; }
   function rangeLabel() { const r = selectedRange(); return r.start ? `${dateHU(r.start)} – ${dateHU(r.end)}` : "Minden elérhető adat"; }
+  function rangeLabelFor(range) { return range?.start ? `${dateHU(range.start)} – ${dateHU(range.end)}` : `Minden elérhető adat${range?.end ? ` · ${dateHU(range.end)}-ig` : ""}`; }
+  function latestMetricDate(source, names = [], accountOnly = false) {
+    let best = null;
+    for (const row of state.metrics) {
+      if (row.source !== source) continue;
+      if (names.length && !names.includes(row.metric_name)) continue;
+      if (accountOnly && String(row.content_external_id || "") !== "") continue;
+      const key = String(row.metric_date || "").slice(0,10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
+      const d = new Date(`${key}T23:59:59`);
+      if (Number.isNaN(d.getTime())) continue;
+      if (!best || d > best) best = d;
+    }
+    return best;
+  }
+  function sourceDataRange(source, base = selectedRange()) {
+    const configs = {
+      blog: { names:["web_views"], accountOnly:false },
+      linkedin_company: { names:["impressions","clicks","followers_gained","page_views","unique_visitors"], accountOnly:true },
+    };
+    const config = configs[source];
+    if (!config) return base;
+    const latest = latestMetricDate(source, config.names, config.accountOnly);
+    if (!latest || base.end <= latest) return base;
+    const end = new Date(latest); end.setHours(23,59,59,999);
+    if (!base.start) return { ...base, end };
+    if (rangeSelect.value === "year") {
+      const start = new Date(end.getFullYear(),0,1); start.setHours(0,0,0,0);
+      return { ...base, start, end, days:Math.ceil((end-start)/86400000)+1 };
+    }
+    const days = base.days || Math.ceil((base.end-base.start)/86400000)+1;
+    const start = new Date(end); start.setDate(start.getDate()-days+1); start.setHours(0,0,0,0);
+    return { ...base, start, end, days };
+  }
+  function previousRangeFor(range) {
+    if (compareSelect.value === "none" || !range?.start || !range?.days) return null;
+    const end = new Date(range.start); end.setDate(end.getDate()-1); end.setHours(23,59,59,999);
+    const start = new Date(end); start.setDate(start.getDate()-range.days+1); start.setHours(0,0,0,0);
+    return {start,end,days:range.days};
+  }
 
   async function fetchPaged(table, orderColumn = null, ascending = false) {
     const rows = []; const pageSize = 1000; let from = 0;
@@ -539,7 +579,7 @@
   }
 
   function renderBlog() {
-    const r=selectedRange(),p=previousRange();
+    const r=sourceDataRange("blog",selectedRange()),p=previousRangeFor(r);
     const views=sourceMetric("blog","exposure",r),sessions=accountMetricTotal("blog",["web_sessions"],r),users=accountMetricTotal("blog",["web_users"],r),engaged=accountMetricTotal("blog",["web_engaged_sessions"],r),seconds=accountMetricTotal("blog",["web_engagement_seconds"],r),pub=contents(["blog"],r).length;
     const prevViews=p?sourceMetric("blog","exposure",p):0,prevSessions=p?accountMetricTotal("blog",["web_sessions"],p):0,prevUsers=p?accountMetricTotal("blog",["web_users"],p):0,prevEngaged=p?accountMetricTotal("blog",["web_engaged_sessions"],p):0,prevSeconds=p?accountMetricTotal("blog",["web_engagement_seconds"],p):0;
     const avgEngagement=users?seconds/users:0,prevAvgEngagement=prevUsers?prevSeconds/prevUsers:0,items=scoredContents(["blog"],r);
@@ -554,16 +594,16 @@
   }
 
   function renderLinkedInCompany() {
-    const source="linkedin_company",r=selectedRange(),p=previousRange();
+    const source="linkedin_company",r=sourceDataRange(source,selectedRange()),p=previousRangeFor(r);
     const connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source);
     const impressions=accountMetricTotal(source,["impressions"],r), clicks=accountMetricTotal(source,["clicks"],r), reactions=accountMetricTotal(source,["reactions"],r), comments=accountMetricTotal(source,["comments"],r), shares=accountMetricTotal(source,["shares"],r), interactions=reactions+comments+shares;
     const followersNow=audience(source), followersGained=accountMetricTotal(source,["followers_gained"],r), pageViews=accountMetricTotal(source,["page_views"],r), uniqueVisitors=accountMetricTotal(source,["unique_visitors"],r);
     const prevImpressions=p?accountMetricTotal(source,["impressions"],p):0, prevClicks=p?accountMetricTotal(source,["clicks"],p):0, prevInteractions=p?(accountMetricTotal(source,["reactions"],p)+accountMetricTotal(source,["comments"],p)+accountMetricTotal(source,["shares"],p)):0, prevFollowersGained=p?accountMetricTotal(source,["followers_gained"],p):0, prevVisitors=p?accountMetricTotal(source,["unique_visitors"],p):0, prevAudience=p?audienceAtEnd(source,p):0;
     const ctr=impressions?clicks/impressions:0, interactionRate=impressions?interactions/impressions:0, items=scoredContents([source],r);
     pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Még nincs LinkedIn-adat.</strong><p>Töltsd fel a LinkedIn Content, Followers és Visitors XLS exportokat a privát collector repositoryba.</p></div>`:`<div class="callout"><strong>LinkedIn XLS-adatok betöltve.</strong><p>Ez a csatorna mostantól a hivatalos LinkedIn Content, Followers és Visitors XLS exportokra épül.</p></div>`}
-    <section class="kpi-grid six" style="margin-top:15px">${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás",p?delta(clicks,prevClicks):undefined)}${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`,p?delta(interactions,prevInteractions):undefined)}${kpi("Követők",followersNow?num(followersNow,true):"–",followersNow?"aktuális exportált állomány":"még nincs követő-snapshot",p&&prevAudience?delta(followersNow,prevAudience):undefined)}${kpi("Új követők",num(followersGained,true),rangeLabel(),p?delta(followersGained,prevFollowersGained):undefined)}${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}</section>
-    <section class="grid-2" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐNÖVEKEDÉS</p><h2>Új követők alakulása</h2></div><span class="panel-note">napi új követők + 28 napos átlag</span></div><div class="chart-wrap"><canvas id="linkedin-followers-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">OLDALLÁTOGATOTTSÁG</p><h2>LinkedIn-oldal látogatói</h2></div><span class="panel-note">oldalmegtekintések és egyedi látogatók</span></div><div class="chart-wrap"><canvas id="linkedin-visitors-chart"></canvas></div></article></section>
-    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">TARTALMI TELJESÍTMÉNY</p><h2>Megjelenések és kattintások</h2></div><span class="panel-note">napi organikus + szponzorált összesen</span></div><div class="chart-wrap"><canvas id="linkedin-performance-chart"></canvas></div></article>${contentTable(items,"LinkedIn – összes poszt")}`;
+    <section class="kpi-grid six" style="margin-top:15px">${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás",p?delta(clicks,prevClicks):undefined)}${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`,p?delta(interactions,prevInteractions):undefined)}${kpi("Követők",followersNow?num(followersNow,true):"–",followersNow?"aktuális exportált állomány":"még nincs követő-snapshot",p&&prevAudience?delta(followersNow,prevAudience):undefined)}${kpi("Új követők",num(followersGained,true),rangeLabelFor(r),p?delta(followersGained,prevFollowersGained):undefined)}${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}</section>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">TARTALMI TELJESÍTMÉNY</p><h2>Megjelenések és kattintások</h2></div><span class="panel-note">napi organikus + szponzorált összesen · adatok ${dateHU(r.end)}-ig</span></div><div class="chart-wrap"><canvas id="linkedin-performance-chart"></canvas></div></article>
+    <section class="grid-2" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐNÖVEKEDÉS</p><h2>Új követők alakulása</h2></div><span class="panel-note">napi új követők + 28 napos átlag</span></div><div class="chart-wrap"><canvas id="linkedin-followers-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">OLDALLÁTOGATOTTSÁG</p><h2>LinkedIn-oldal látogatói</h2></div><span class="panel-note">oldalmegtekintések és egyedi látogatók</span></div><div class="chart-wrap"><canvas id="linkedin-visitors-chart"></canvas></div></article></section>${contentTable(items,"LinkedIn – összes poszt")}`;
     const followerSeries=seriesWithMovingAverages((range)=>accountFlowSeries(source,["followers_gained"],range),r,[28]); chart("linkedin-followers-chart",{type:"bar",data:{labels:followerSeries.labels,datasets:[{type:"bar",label:"Új követők",data:followerSeries.values,backgroundColor:"rgba(40,103,178,.28)",borderColor:"#2867b2",borderWidth:1,borderRadius:5},{type:"line",label:"28 napos átlag",data:followerSeries.averages[28],borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.3,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
     const visitorSeries=accountFlowSeries(source,["unique_visitors"],r), pageViewSeries=accountFlowSeries(source,["page_views"],r); lineChart("linkedin-visitors-chart",visitorSeries.labels,[{label:"Egyedi látogatók",data:visitorSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Oldalmegtekintések",data:pageViewSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
     const impressionSeries=accountFlowSeries(source,["impressions"],r), clickSeries=accountFlowSeries(source,["clicks"],r); lineChart("linkedin-performance-chart",impressionSeries.labels,[{label:"Megjelenések",data:impressionSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Kattintások",data:clickSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
@@ -613,7 +653,7 @@
     const multi=clusters.filter((x)=>x.items.length>1).map((x)=>{const stats=x.items.map(contentStats);return {...x,exposure:stats.reduce((s,v)=>s+v.exposure,0),clicks:stats.reduce((s,v)=>s+v.clicks,0),engagement:stats.reduce((s,v)=>s+v.engagement,0)};}).sort((a,b)=>(b.exposure+b.clicks*4)-(a.exposure+a.clicks*4));return multi;
   }
   function renderStories(){const clusters=storyClusters();const topics={};contents(OWN_SOURCES).forEach((c)=>{const t=topicFor(c);topics[t]??={count:0,exp:0,clicks:0};const s=contentStats(c);topics[t].count++;topics[t].exp+=s.exposure;topics[t].clicks+=s.clicks;});const topicRows=Object.entries(topics).map(([name,v])=>({name,...v})).sort((a,b)=>b.exp-a.exp);
-    pageContent.innerHTML=`<div class="callout"><strong>Jelenlegi sztoricsoportosítás</strong><p>A rendszer most cím-, szöveg- és időbeli hasonlóság alapján kapcsolja össze a különböző csatornák tartalmait. Ez a működő alap; a következő AI-fázis szemantikus hasonlósággal, entitásokkal és Observer-megjelenésekkel pontosítja a kapcsolatokat.</p></div><section class="grid-2 equal" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMATELJESÍTMÉNY</p><h2>Legerősebb témák</h2></div></div><div class="chart-wrap"><canvas id="topic-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMARANGSOR</p><h2>Tartalmak és kattintások</h2></div></div><div id="topic-rank" class="rank-list"></div></article></section><div class="section-title"><div><p class="eyebrow">KERESZTCSATORNÁS CSOPORTOK</p><h2>Közös kommunikációs sztorik</h2></div><span class="panel-note">${num(clusters.length)} többcsatornás csoport</span></div><section class="grid-3">${clusters.map((x)=>`<article class="story-card"><h3>${esc(clampText(x.seed.title,90))}</h3><p class="muted">${dateHU(x.seed.published_at)} · ${esc(topicFor(x.seed))}</p><div class="story-meta">${[...new Set(x.items.map((i)=>i.source))].map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><div class="story-stats"><div><strong>${num(x.exposure,true)}</strong><span>összes elsődleges eredmény</span></div><div><strong>${num(x.clicks)}</strong><span>kattintás</span></div><div><strong>${num(x.items.length)}</strong><span>tartalom</span></div></div></article>`).join("")||`<div class="empty-state"><strong>Még nincs elég keresztcsatornás tartalom.</strong>Legalább két hasonló téma szükséges.</div>`}</section>`;
+    pageContent.innerHTML=`<div class="callout"><strong>Jelenlegi sztoricsoportosítás</strong><p>A rendszer most cím-, szöveg- és időbeli hasonlóság alapján kapcsolja össze a különböző csatornák tartalmait. Ez a működő alap; a következő AI-fázis szemantikus hasonlósággal, entitásokkal és Observer-megjelenésekkel pontosítja a kapcsolatokat.</p></div><section class="grid-2 equal story-topic-grid" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMATELJESÍTMÉNY</p><h2>Legerősebb témák</h2></div></div><div class="chart-wrap"><canvas id="topic-chart"></canvas></div></article><article class="panel topic-rank-panel"><div class="panel-heading"><div><p class="eyebrow">TÉMARANGSOR</p><h2>Tartalmak és kattintások</h2></div><span class="panel-note">görgethető teljes lista</span></div><div id="topic-rank" class="rank-list topic-rank-scroll"></div></article></section><div class="section-title"><div><p class="eyebrow">KERESZTCSATORNÁS CSOPORTOK</p><h2>Közös kommunikációs sztorik</h2></div><span class="panel-note">${num(clusters.length)} többcsatornás csoport</span></div><section class="grid-3">${clusters.map((x)=>`<article class="story-card"><h3>${esc(clampText(x.seed.title,90))}</h3><p class="muted">${dateHU(x.seed.published_at)} · ${esc(topicFor(x.seed))}</p><div class="story-meta">${[...new Set(x.items.map((i)=>i.source))].map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><div class="story-stats"><div><strong>${num(x.exposure,true)}</strong><span>összes elsődleges eredmény</span></div><div><strong>${num(x.clicks)}</strong><span>kattintás</span></div><div><strong>${num(x.items.length)}</strong><span>tartalom</span></div></div></article>`).join("")||`<div class="empty-state"><strong>Még nincs elég keresztcsatornás tartalom.</strong>Legalább két hasonló téma szükséges.</div>`}</section>`;
     barChart("topic-chart",topicRows.slice(0,8).map((x)=>x.name),topicRows.slice(0,8).map((x)=>x.exp),topicRows.slice(0,8).map((_,i)=>["#0a4b55","#13707d","#2de68c","#b54708","#2867b2","#9b59b6","#7ba7a2","#526b6e"][i]));const max=safeMax(topicRows.map((x)=>x.exp),1)||1;$("topic-rank").innerHTML=topicRows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} tartalom · ${num(x.clicks)} kattintás</small><div class="progress"><span style="width:${x.exp/max*100}%"></span></div></div><span class="rank-value">${num(x.exp,true)}</span></div>`).join("");
   }
 
