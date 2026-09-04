@@ -26,7 +26,7 @@
   const OWN_SOURCES = ["blog", "mailchimp", ...SOCIAL_SOURCES];
   const ALL_SOURCES = [...OWN_SOURCES, "observer"];
   const PAGE_META = {
-    overview: ["VEZETŐI ÖSSZKÉP", "Összkép", "A saját csatornák és a médiamegjelenések közös áttekintése."],
+    overview: ["VEZETŐI ÖSSZKÉP", "Összkép", "30 másodperces vezetői kép: mi történt, mi működött és mire kell figyelni."],
     newsletter: ["E-MAIL-MARKETING", "Hírlevél", "Kampányok, kattintások, feliratkozók és a legsikeresebb tartalmak."],
     blog: ["SAJÁT MÉDIA", "Grandio Blog", "Olvasottság, forgalmi források, szerzők és SEO-teljesítmény."],
     linkedin_company: ["KÖZÖSSÉGI MÉDIA", "LinkedIn", "A GRÁNIT Alapkezelő LinkedIn-oldalának teljesítménye."],
@@ -34,15 +34,14 @@
     instagram: ["KÖZÖSSÉGI MÉDIA", "Instagram", "Reels, karusszelek, mentések, megosztások és követőnövekedés."],
     youtube: ["VIDEÓ", "YouTube", "Megtekintések, nézési idő, feliratkozók és videóteljesítmény."],
     content: ["TARTALOMADATBÁZIS", "Tartalomkereső", "Minden importált cikk, poszt, videó és hírlevél egy helyen."],
-    stories: ["KERESZTCSATORNÁS ELEMZÉS", "Sztorik és témák", "Az egymáshoz kapcsolódó tartalmak és a legerősebb témák."],
+    stories: ["KERESZTCSATORNÁS ELEMZÉS", "Sztorik és elemzés", "Keresztcsatornás történetek, témák és ezek teljesítménye."],
     observer: ["MÉDIAFIGYELÉS", "Observer", "Sajtómegjelenések, megszólalások, említések és reputációs jelzések."],
-    ai: ["AUTOMATIKUS ÉRTELMEZÉS", "AI elemző", "Adatokra épülő vezetői összefoglalók és következő lépések."],
     connections: ["RENDSZERÁLLAPOT", "Adatkapcsolatok", "A collectorok frissessége, hibái és beállítási állapota."],
   };
 
   const state = {
     client: null, user: null, page: location.hash.replace("#", "") || "overview",
-    accounts: [], content: [], metrics: [], syncRuns: [], reports: [], charts: [], loadedAt: null,
+    accounts: [], content: [], metrics: [], syncRuns: [], charts: [], loadedAt: null,
   };
 
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
@@ -106,11 +105,11 @@
   async function loadData(showMessage = true) {
     if (showMessage) $("last-refresh").textContent = "Adatok betöltése…";
     try {
-      const [accounts, content, metrics, syncRuns, reports] = await Promise.all([
+      const [accounts, content, metrics, syncRuns] = await Promise.all([
         fetchPaged("accounts", "updated_at", false), fetchPaged("content_items", "published_at", false),
-        fetchPaged("metric_daily", "metric_date", false), fetchPaged("sync_runs", "started_at", false), fetchPaged("ai_reports", "report_date", false),
+        fetchPaged("metric_daily", "metric_date", false), fetchPaged("sync_runs", "started_at", false),
       ]);
-      Object.assign(state, { accounts, content, metrics, syncRuns, reports, loadedAt: new Date() });
+      Object.assign(state, { accounts, content, metrics, syncRuns, loadedAt: new Date() });
       $("last-refresh").textContent = `Betöltve: ${dateTimeHU(state.loadedAt)}`;
       $("footer-data-note").textContent = `${num(content.length)} tartalom · ${num(metrics.length)} adatsor`;
       renderPage();
@@ -360,29 +359,93 @@
   function insightsHtml(items=deterministicInsights()) { return `<div class="insight-list">${items.map((i)=>`<div class="insight ${i.type||""}"><strong>${esc(i.title)}</strong><p>${esc(i.text)}</p></div>`).join("")}</div>`; }
   function latestSync() { const map=new Map(); [...state.syncRuns].sort((a,b)=>String(b.finished_at||b.started_at).localeCompare(String(a.finished_at||a.started_at))).forEach((r)=>{if(!map.has(r.source))map.set(r.source,r);}); return [...map.values()]; }
 
+  function channelPage(source) {
+    const pages = { blog:"blog", mailchimp:"newsletter", linkedin_company:"linkedin_company", facebook:"facebook", instagram:"instagram", youtube:"youtube", observer:"observer" };
+    return pages[source] || "overview";
+  }
+  function contentNoun(source, count) {
+    if (source === "blog") return `${num(count)} cikk`;
+    if (source === "mailchimp") return `${num(count)} kampány`;
+    if (source === "observer") return `${num(count)} médiatörténet`;
+    if (source === "youtube") return `${num(count)} videó`;
+    return `${num(count)} tartalom`;
+  }
+  function overviewChannelRows(range, previous) {
+    return ALL_SOURCES.map((source) => {
+      const value = sourceMetric(source,"exposure",range);
+      const prev = previous ? sourceMetric(source,"exposure",previous) : 0;
+      const items = contents([source],range).length;
+      const change = previous ? delta(value,prev) : null;
+      return { source, value, prev, items, change };
+    }).filter((x)=>x.value>0 || x.items>0 || audience(x.source)>0);
+  }
+  function overviewBriefing(range, previous) {
+    const ownItems = contents(OWN_SOURCES,range);
+    const ownPrev = previous ? contents(OWN_SOURCES,previous) : [];
+    const mediaItems = contents(["observer"],range);
+    const mediaPrev = previous ? contents(["observer"],previous) : [];
+    const rows = overviewChannelRows(range,previous);
+    const ownRows = rows.filter((x)=>x.source!=="observer" && x.value>0);
+    const movers = ownRows.filter((x)=>previous && x.prev>0).map((x)=>({...x,change:delta(x.value,x.prev)})).filter((x)=>Number.isFinite(x.change));
+    const strongest = [...movers].sort((a,b)=>b.change-a.change)[0];
+    const weakest = [...movers].sort((a,b)=>a.change-b.change)[0];
+    const bestContent = topContents(OWN_SOURCES,1,range)[0];
+    const highPriority = mediaItems.filter((c)=>Number(c.metadata?.priority||0)>=4);
+    const syncErrors = latestSync().filter((x)=>x.status==="error");
+
+    const happenedParts = [`${num(ownItems.length)} saját tartalom jelent meg`];
+    if(mediaItems.length) happenedParts.push(`${num(mediaItems.length)} Observer-történet érkezett`);
+    if(previous) happenedParts.push(`a saját publikációk száma ${deltaHtml(delta(ownItems.length,ownPrev.length))}`);
+
+    let worked = "Még nincs elég összehasonlítható teljesítményadat a legerősebb eredmény kiemeléséhez.";
+    if(bestContent) {
+      const s=bestContent.s;
+      worked = `A legerősebb tartalom: „${esc(clampText(bestContent.c.title,120))}” – ${num(s.exposure,true)} ${primaryMetricLabel(bestContent.c.source)}${s.engagement?`, ${num(s.engagement)} interakcióval`:""}.`;
+      if(strongest && strongest.change>0) worked += ` Csatornaszinten a ${sourceLabel(strongest.source)} javult a legtöbbet (${deltaHtml(strongest.change)}).`;
+    }
+
+    let watch = "Nincs kiemelt adatkapcsolati vagy médiakockázati jelzés a kiválasztott időszakban.";
+    if(highPriority.length) watch = `${num(highPriority.length)} magas prioritású Observer-történet látható az időszakban; ezeket érdemes elsőként átnézni.`;
+    else if(syncErrors.length) watch = `${syncErrors.map((x)=>sourceLabel(x.source)).join(", ")} legutóbbi adatgyűjtése hibával zárult, ezért az összkép hiányos lehet.`;
+    else if(weakest && weakest.change<-.05) watch = `A legnagyobb visszaesés a ${sourceLabel(weakest.source)} csatornán látszik (${deltaHtml(weakest.change)} az előző azonos időszakhoz képest).`;
+
+    return { happened:happenedParts.join(" · "), worked, watch };
+  }
+  function briefingCard(kind,title,text) {
+    const icon = kind==="worked" ? "↗" : kind==="watch" ? "!" : "●";
+    return `<article class="briefing-card ${kind}"><div class="briefing-icon">${icon}</div><div><p class="eyebrow">${esc(title)}</p><p>${text}</p></div></article>`;
+  }
+  function overviewStoryCards(range) {
+    const clusters=storyClusters().map((x)=>{const items=x.items.filter((i)=>inRange(i.published_at,range));const stats=items.map(contentStats);return {...x,items,exposure:stats.reduce((sum,v)=>sum+v.exposure,0),engagement:stats.reduce((sum,v)=>sum+v.engagement,0)};}).filter((x)=>x.items.length>1).sort((a,b)=>b.exposure-a.exposure).slice(0,3);
+    if(clusters.length) return clusters.map((x)=>`<article class="overview-story-card"><div class="overview-story-top"><div><p class="eyebrow">TÖBB CSATORNÁN</p><h3>${esc(clampText(x.items[0]?.title||x.seed.title,90))}</h3></div><span class="story-count">${num(x.items.length)}</span></div><div class="story-meta">${[...new Set(x.items.map((i)=>i.source))].map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><div class="overview-story-metrics"><span><strong>${num(x.exposure,true)}</strong> platformeredmény</span><span><strong>${num(x.engagement)}</strong> interakció</span></div></article>`).join("");
+    const fallback=topContents(OWN_SOURCES,3,range);
+    return fallback.map((x)=>`<article class="overview-story-card"><div class="overview-story-top"><div><p class="eyebrow">${esc(sourceLabel(x.c.source).toUpperCase())}</p><h3>${esc(clampText(x.c.title,90))}</h3></div></div><div class="overview-story-metrics"><span><strong>${num(x.s.exposure,true)}</strong> ${esc(primaryMetricLabel(x.c.source))}</span><span><strong>${num(x.s.engagement)}</strong> interakció</span></div></article>`).join("") || `<div class="empty-state">Még nincs elég tartalom a kiemeléshez.</div>`;
+  }
   function renderOverview() {
     const r=selectedRange(), p=previousRange();
-    const web=sourceMetric("blog","exposure",r), webPrev=p?sourceMetric("blog","exposure",p):0;
-    const mailOpens=sourceMetric("mailchimp","exposure",r), mailOpensPrev=p?sourceMetric("mailchimp","exposure",p):0;
-    const mailClicks=sourceMetric("mailchimp","clicks",r);
-    const social=SOCIAL_SOURCES.reduce((s,x)=>s+sourceMetric(x,"exposure",r),0), socialPrev=p?SOCIAL_SOURCES.reduce((s,x)=>s+sourceMetric(x,"exposure",p),0):0;
-    const aud=OWN_SOURCES.reduce((s,x)=>s+audience(x),0);
-    const pub=contents(OWN_SOURCES,r).length, pubPrev=p?contents(OWN_SOURCES,p).length:0;
-    const mentions=sourceMetric("observer","exposure",r), mentionsPrev=p?sourceMetric("observer","exposure",p):0;
-    pageContent.innerHTML=`<section class="kpi-grid six">${kpi("Blogmegtekintések",num(web),"GA4 / kiválasztott időszak",delta(web,webPrev))}${kpi("Hírlevél – egyedi megnyitók",num(mailOpens),`${num(mailClicks)} egyedi kattintó`,delta(mailOpens,mailOpensPrev))}${kpi("Social megjelenések",num(social,true),"platformnatív mutatók összege",delta(social,socialPrev))}${kpi("Csatornaközönségek összege",num(aud,true),"nem egyedi személyek; csatornánkénti állapot",p?delta(aud,OWN_SOURCES.reduce((sum,x)=>sum+audienceAtEnd(x,p),0)):undefined)}${kpi("Megjelent tartalmak",num(pub),"cikkek, posztok, videók, levelek",delta(pub,pubPrev))}${kpi("Sajtómegjelenések",num(mentions),"Observer-megjelenések",delta(mentions,mentionsPrev))}</section>
-    <section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">NORMALIZÁLT TREND</p><h2>Csatornák teljesítménye a saját átlagukhoz képest</h2></div><span class="panel-note">100 = az időszak napi átlaga · 7 napos simítás</span></div><div class="chart-wrap"><canvas id="overview-trend"></canvas></div></article>
-    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">CSATORNAÁLLAPOT</p><h2>Aktivitás csatornánként</h2></div></div><div id="channel-ranking" class="rank-list"></div></article></section>
-    <section class="grid-2 equal"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">AUTOMATIKUS ÉRTELMEZÉS</p><h2>Mit érdemes most látni?</h2></div></div>${insightsHtml()}</article>
-    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORRÁSMIX</p><h2>Publikált tartalmak megoszlása</h2></div></div><div class="chart-wrap compact"><canvas id="overview-mix"></canvas></div></article></section>
-    ${contentTable(scoredContents(sourceSelect.value === "all" ? ALL_SOURCES : [sourceSelect.value],r),"Az időszak összes tartalma")}`;
-    const overviewSources = sourceSelect.value === "all" ? ALL_SOURCES : [sourceSelect.value];
-    const available=overviewSources.filter((s)=>sourceMetric(s,"exposure",r)>0||contents([s],r).length>0);
-    const labels=allDates(r); const datasets=[];
-    available.forEach((s)=>{const series=dailySeries(s,"exposure",r).values;const avg=series.reduce((a,b)=>a+b,0)/Math.max(1,series.length);if(!avg)return;datasets.push({label:SOURCE[s].short,data:movingAverage(series,7).map((v)=>v/avg*100),borderColor:SOURCE[s].color,backgroundColor:"transparent",tension:.28,pointRadius:0,borderWidth:2});});
-    lineChart("overview-trend",labels,datasets,{scales:{x:{grid:{display:false},ticks:{maxTicksLimit:9}},y:{beginAtZero:false,suggestedMin:0,grid:{color:"rgba(16,45,49,.06)"},title:{display:true,text:"Saját átlag = 100"}}}});
-    const rank=available.map((s)=>({s,v:sourceMetric(s,"exposure",r),pub:contents([s],r).length})).sort((a,b)=>b.v-a.v); const max=safeMax(rank.map((x)=>x.v),1)||1;
-    $("channel-ranking").innerHTML=rank.length?rank.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(sourceLabel(x.s))}<small>${num(x.pub)} tartalom</small><div class="progress"><span style="width:${Math.max(4,x.v/max*100)}%"></span></div></div><span class="rank-value">${num(x.v,true)}</span></div>`).join(""):`<div class="empty-state">Még nincs csatornaadat.</div>`;
-    const mix=OWN_SOURCES.map((s)=>contents([s],r).length); doughnut("overview-mix",OWN_SOURCES.map((s)=>SOURCE[s].short),mix,OWN_SOURCES.map((s)=>SOURCE[s].color));
+    const briefing=overviewBriefing(r,p);
+    const channelRows=overviewChannelRows(r,p);
+    pageContent.innerHTML=`
+      <section class="executive-briefing">
+        <div class="section-title overview-section-title"><div><p class="eyebrow">VEZETŐI BRIEFING</p><h2>Mi a fontos most?</h2></div><span class="panel-note">${esc(rangeLabel())}</span></div>
+        <div class="briefing-grid">
+          ${briefingCard("happened","MI TÖRTÉNT?",briefing.happened)}
+          ${briefingCard("worked","MI MŰKÖDÖTT?",briefing.worked)}
+          ${briefingCard("watch","MIRE FIGYELJÜNK?",briefing.watch)}
+        </div>
+      </section>
+      <section class="overview-grid">
+        <article class="panel overview-channels-panel">
+          <div class="panel-heading"><div><p class="eyebrow">CSATORNÁK ÉS MÉDIA</p><h2>Egy pillantásra</h2></div><span class="panel-note">kattints a részletekhez</span></div>
+          <div class="overview-channel-list">${channelRows.map((x)=>`<button class="overview-channel-row" data-nav-page="${channelPage(x.source)}"><span class="channel-dot" style="background:${SOURCE[x.source].color}"></span><span class="overview-channel-name"><strong>${esc(sourceLabel(x.source))}</strong><small>${esc(contentNoun(x.source,x.items))}</small></span><span class="overview-channel-value"><strong>${num(x.value,true)}</strong><small>${esc(primaryMetricLabel(x.source))}</small></span><span class="overview-channel-delta">${p?deltaHtml(x.change):'<span class="delta neutral">–</span>'}</span><span class="overview-channel-arrow">›</span></button>`).join("")||`<div class="empty-state">Még nincs csatornaadat.</div>`}</div>
+        </article>
+        <article class="panel overview-stories-panel">
+          <div class="panel-heading"><div><p class="eyebrow">KIEMELT TARTALMAK</p><h2>Legerősebb sztorik</h2></div><button class="text-button" data-nav-page="stories">Sztorik és elemzés →</button></div>
+          <div class="overview-story-list">${overviewStoryCards(r)}</div>
+          <p class="metric-definition">A jelenlegi sztoricsoportosítás szabályalapú. A következő AI-fázis szemantikus összekapcsolással és Observer-adatokkal pontosítja.</p>
+        </article>
+      </section>`;
+    pageContent.querySelectorAll("[data-nav-page]").forEach((el)=>el.addEventListener("click",()=>navigate(el.dataset.navPage)));
   }
 
   function campaignRows(range=selectedRange()) { return contents(["mailchimp"],range).map((c)=>({c,s:contentStats(c),m:c.metadata||{}})).sort((a,b)=>String(b.c.published_at).localeCompare(String(a.c.published_at))); }
@@ -512,7 +575,7 @@
     const multi=clusters.filter((x)=>x.items.length>1).map((x)=>{const stats=x.items.map(contentStats);return {...x,exposure:stats.reduce((s,v)=>s+v.exposure,0),clicks:stats.reduce((s,v)=>s+v.clicks,0),engagement:stats.reduce((s,v)=>s+v.engagement,0)};}).sort((a,b)=>(b.exposure+b.clicks*4)-(a.exposure+a.clicks*4));return multi;
   }
   function renderStories(){const clusters=storyClusters();const topics={};contents(OWN_SOURCES).forEach((c)=>{const t=topicFor(c);topics[t]??={count:0,exp:0,clicks:0};const s=contentStats(c);topics[t].count++;topics[t].exp+=s.exposure;topics[t].clicks+=s.clicks;});const topicRows=Object.entries(topics).map(([name,v])=>({name,...v})).sort((a,b)=>b.exp-a.exp);
-    pageContent.innerHTML=`<div class="callout"><strong>Automatikus sztoricsoportosítás</strong><p>A rendszer cím-, szöveg- és időbeli hasonlóság alapján kapcsolja össze a különböző csatornák tartalmait. A találatok tájékoztató jellegűek, de már képesek megmutatni a keresztcsatornás kommunikációt.</p></div><section class="grid-2 equal" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMATELJESÍTMÉNY</p><h2>Legerősebb témák</h2></div></div><div class="chart-wrap"><canvas id="topic-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMARANGSOR</p><h2>Tartalmak és kattintások</h2></div></div><div id="topic-rank" class="rank-list"></div></article></section><div class="section-title"><div><p class="eyebrow">KERESZTCSATORNÁS CSOPORTOK</p><h2>Feltételezett közös sztorik</h2></div><span class="panel-note">${num(clusters.length)} többcsatornás csoport</span></div><section class="grid-3">${clusters.map((x)=>`<article class="story-card"><h3>${esc(clampText(x.seed.title,90))}</h3><p class="muted">${dateHU(x.seed.published_at)} · ${esc(topicFor(x.seed))}</p><div class="story-meta">${[...new Set(x.items.map((i)=>i.source))].map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><div class="story-stats"><div><strong>${num(x.exposure,true)}</strong><span>összes elsődleges eredmény</span></div><div><strong>${num(x.clicks)}</strong><span>kattintás</span></div><div><strong>${num(x.items.length)}</strong><span>tartalom</span></div></div></article>`).join("")||`<div class="empty-state"><strong>Még nincs elég keresztcsatornás tartalom.</strong>Legalább két hasonló téma szükséges.</div>`}</section>`;
+    pageContent.innerHTML=`<div class="callout"><strong>Jelenlegi sztoricsoportosítás</strong><p>A rendszer most cím-, szöveg- és időbeli hasonlóság alapján kapcsolja össze a különböző csatornák tartalmait. Ez a működő alap; a következő AI-fázis szemantikus hasonlósággal, entitásokkal és Observer-megjelenésekkel pontosítja a kapcsolatokat.</p></div><section class="grid-2 equal" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMATELJESÍTMÉNY</p><h2>Legerősebb témák</h2></div></div><div class="chart-wrap"><canvas id="topic-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMARANGSOR</p><h2>Tartalmak és kattintások</h2></div></div><div id="topic-rank" class="rank-list"></div></article></section><div class="section-title"><div><p class="eyebrow">KERESZTCSATORNÁS CSOPORTOK</p><h2>Közös kommunikációs sztorik</h2></div><span class="panel-note">${num(clusters.length)} többcsatornás csoport</span></div><section class="grid-3">${clusters.map((x)=>`<article class="story-card"><h3>${esc(clampText(x.seed.title,90))}</h3><p class="muted">${dateHU(x.seed.published_at)} · ${esc(topicFor(x.seed))}</p><div class="story-meta">${[...new Set(x.items.map((i)=>i.source))].map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><div class="story-stats"><div><strong>${num(x.exposure,true)}</strong><span>összes elsődleges eredmény</span></div><div><strong>${num(x.clicks)}</strong><span>kattintás</span></div><div><strong>${num(x.items.length)}</strong><span>tartalom</span></div></div></article>`).join("")||`<div class="empty-state"><strong>Még nincs elég keresztcsatornás tartalom.</strong>Legalább két hasonló téma szükséges.</div>`}</section>`;
     barChart("topic-chart",topicRows.slice(0,8).map((x)=>x.name),topicRows.slice(0,8).map((x)=>x.exp),topicRows.slice(0,8).map((_,i)=>["#0a4b55","#13707d","#2de68c","#b54708","#2867b2","#9b59b6","#7ba7a2","#526b6e"][i]));const max=safeMax(topicRows.map((x)=>x.exp),1)||1;$("topic-rank").innerHTML=topicRows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} tartalom · ${num(x.clicks)} kattintás</small><div class="progress"><span style="width:${x.exp/max*100}%"></span></div></div><span class="rank-value">${num(x.exp,true)}</span></div>`).join("");
   }
 
@@ -533,12 +596,11 @@
     $("observer-search").addEventListener("input",update);$("observer-type").addEventListener("change",update);update();
   }
 
-  function renderAI(){const report=state.reports[0];const insights=deterministicInsights();pageContent.innerHTML=`<section class="grid-2"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">LEGFRISSEBB AI-RIPORT</p><h2>${report?`${dateHU(report.period_start)} – ${dateHU(report.period_end)}`:"Még nincs API-alapú riport"}</h2></div>${report?`<span class="tag">${esc(report.model)}</span>`:""}</div><div class="ai-report">${report?esc(report.report_text):`Az automatikus, nagy nyelvi modellel készülő heti riport opcionális. A privát collector-repositoryban beállított OpenAI API-kulccsal és modellel kapcsolható be.`}</div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">AZONNALI ELEMZÉS</p><h2>A jelenlegi adatokból</h2></div></div>${insightsHtml(insights)}</article></section><section class="grid-2 equal"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">JAVASOLT KÉRDÉSEK</p><h2>Mire használható az AI-réteg?</h2></div></div><div class="insight-list">${["Mely témák teljesítettek legjobban LinkedInen az elmúlt hat hónapban?","Mely Grandio-cikkek kapták a legtöbb hírlevélkattintást?","Mely sajtómegjelenések igényelnek kommunikációs reakciót?","Mi okozhatta a blogforgalom változását?"].map((q)=>`<div class="insight"><strong>${esc(q)}</strong><p>A későbbi interaktív AI-chat ezekre az adatbázisból, ellenőrizhető számokkal válaszolhat.</p></div>`).join("")}</div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">BIZTONSÁG</p><h2>Mit csinál és mit nem?</h2></div></div><div class="callout"><p><strong>Az AI csak olvas.</strong> Nem töröl adatot, nem kezel API-kulcsokat, nem publikál posztot és nem küld sajtóreakciót.</p><p>Minden fontos következtetésnek konkrét mérőszámhoz, időszakhoz és csatornához kell kapcsolódnia.</p></div></article></section>`;}
 
-  function expectedSources(){return [{id:"wordpress",label:"Grandio – WordPress",source:"blog"},{id:"mailchimp",label:"Mailchimp",source:"mailchimp"},{id:"ga4",label:"Google Analytics 4",source:"blog"},{id:"search_console",label:"Search Console",source:"blog"},{id:"youtube",label:"YouTube",source:"youtube"},{id:"meta",label:"Facebook és Instagram",source:"facebook"},{id:"linkedin",label:"LinkedIn XLS import",source:"linkedin_company"},{id:"observer",label:"Observer Gmail",source:"observer"},{id:"ai_report",label:"AI heti riport",source:"ai"}];}
+  function expectedSources(){return [{id:"wordpress",label:"Grandio – WordPress",source:"blog"},{id:"mailchimp",label:"Mailchimp",source:"mailchimp"},{id:"ga4",label:"Google Analytics 4",source:"blog"},{id:"search_console",label:"Search Console",source:"blog"},{id:"youtube",label:"YouTube",source:"youtube"},{id:"meta",label:"Facebook és Instagram",source:"facebook"},{id:"linkedin",label:"LinkedIn XLS import",source:"linkedin_company"},{id:"observer",label:"Observer Gmail",source:"observer"}];}
   function renderConnections(){const latest=Object.fromEntries(latestSync().map((x)=>[x.source,x]));pageContent.innerHTML=`<section class="grid-3">${expectedSources().map((e)=>{const r=latest[e.id];let status="missing";if(r){const age=(Date.now()-new Date(r.finished_at||r.started_at))/86400000;status=r.status==="error"?"error":age>3?"stale":"success";}return `<article class="panel"><div class="panel-heading"><div><p class="eyebrow">${esc(e.id.toUpperCase())}</p><h2>${esc(e.label)}</h2></div>${statusBadge(status)}</div>${r?`<p><strong>Utolsó futás:</strong> ${dateTimeHU(r.finished_at||r.started_at)}</p><p><strong>Beírt sorok:</strong> ${num(r.records_written)}</p><p class="muted">${esc(r.message||"")}</p>`:`<div class="empty-state"><strong>Még nem futott le.</strong>Állítsd be a szükséges GitHub secretet és változót, majd indítsd el az Actions fülön.</div>`}</article>`;}).join("")}</section><article class="panel"><div class="panel-heading"><div><p class="eyebrow">ADATBÁZIS</p><h2>Jelenlegi adattartalom</h2></div></div><div class="table-wrap"><table class="sortable-table"><thead><tr><th data-sort-type="text">Forrás</th><th class="num" data-sort-type="number">Fiókok</th><th class="num" data-sort-type="number">Tartalmak</th><th class="num" data-sort-type="number">Mérési sorok</th><th data-sort-type="date">Legutóbbi tartalom</th></tr></thead><tbody>${ALL_SOURCES.map((s)=>{const acc=state.accounts.filter((x)=>x.source===s).length,con=state.content.filter((x)=>x.source===s),met=state.metrics.filter((x)=>x.source===s).length,last=con.sort((a,b)=>String(b.published_at).localeCompare(String(a.published_at)))[0]?.published_at;return `<tr><td data-sort-value="${esc(sourceLabel(s))}">${sourceBadge(s)}</td><td class="num" data-sort-value="${acc}">${num(acc)}</td><td class="num" data-sort-value="${con.length}">${num(con.length)}</td><td class="num" data-sort-value="${met}">${num(met)}</td><td data-sort-value="${esc(last||"")}">${dateHU(last)}</td></tr>`;}).join("")}</tbody></table></div></article>`;}
 
-  function renderPage(){destroyCharts();const meta=PAGE_META[state.page]||PAGE_META.overview;$("page-eyebrow").textContent=meta[0];$("page-title").textContent=meta[1];$("page-subtitle").textContent=meta[2];document.querySelectorAll(".nav-item").forEach((b)=>b.classList.toggle("active",b.dataset.page===state.page));const sourcePages=["linkedin_company","facebook","instagram","youtube"];sourceFilterLabel.classList.add("hidden");if(state.page==="overview")renderOverview();else if(state.page==="newsletter")renderNewsletter();else if(state.page==="blog")renderBlog();else if(sourcePages.includes(state.page))renderPlatform(state.page);else if(state.page==="content")renderContentExplorer();else if(state.page==="stories")renderStories();else if(state.page==="observer")renderObserver();else if(state.page==="ai")renderAI();else if(state.page==="connections")renderConnections();else renderOverview();bindContentLinks();bindSortableTables();}
+  function renderPage(){destroyCharts();if(!PAGE_META[state.page])state.page="overview";const meta=PAGE_META[state.page]||PAGE_META.overview;$("page-eyebrow").textContent=meta[0];$("page-title").textContent=meta[1];$("page-subtitle").textContent=meta[2];document.querySelectorAll(".nav-item").forEach((b)=>b.classList.toggle("active",b.dataset.page===state.page));const sourcePages=["linkedin_company","facebook","instagram","youtube"];sourceFilterLabel.classList.add("hidden");if(state.page==="overview")renderOverview();else if(state.page==="newsletter")renderNewsletter();else if(state.page==="blog")renderBlog();else if(sourcePages.includes(state.page))renderPlatform(state.page);else if(state.page==="content")renderContentExplorer();else if(state.page==="stories")renderStories();else if(state.page==="observer")renderObserver();else if(state.page==="connections")renderConnections();else renderOverview();bindContentLinks();bindSortableTables();}
 
   function bindContentLinks(){document.querySelectorAll("[data-content]").forEach((el)=>{if(el.dataset.bound)return;el.dataset.bound="1";el.addEventListener("click",(ev)=>{ev.preventDefault();const [source,...rest]=el.dataset.content.split("|");showContent(source,rest.join("|"));});});}
   function showContent(source,id){const c=state.content.find((x)=>x.source===source&&String(x.external_id)===String(id));if(!c)return;const s=contentStats(c),m=c.metadata||{};$("modal-content").innerHTML=`<p class="eyebrow">${esc(sourceLabel(c.source))}</p><h2>${esc(c.title)}</h2><div class="modal-meta"><div><span>Publikálás</span><strong>${dateHU(c.published_at)}</strong></div><div><span>Szerző / forrás</span><strong>${esc(c.author||m.primary_source||"–")}</strong></div><div><span>${esc(primaryMetricLabel(c.source))}</span><strong>${num(s.exposure)}</strong></div><div><span>Kattintás · interakció</span><strong>${num(s.clicks)} · ${num(s.engagement)}</strong></div></div><div class="tags">${(m.entities||m.category_names||[]).map((x)=>`<span class="tag">${esc(x)}</span>`).join("")}</div><p class="modal-body">${esc(c.source==="observer"?cleanDisplayText(c.body||"Nincs kivonat."):(c.body||"Nincs kivonat."))}</p>${m.depth?`<div class="callout"><strong>Megjelenítés mélysége</strong><p>${esc(cleanDisplayText(m.depth))}</p></div>`:""}${m.related_mentions?.length?`<h3 style="margin-top:18px">Hasonló megjelenések</h3><div class="insight-list">${m.related_mentions.map((x)=>`<div class="insight"><strong>${esc(x.source||"Kapcsolódó forrás")}</strong><p>${esc(x.title||"")}${x.url?` · ${esc(x.url)}`:""}</p></div>`).join("")}</div>`:""}${c.url?`<p style="margin-top:20px"><a class="primary-button" style="display:inline-flex;padding:11px 15px;text-decoration:none" target="_blank" rel="noopener" href="${esc(c.url)}">Eredeti tartalom megnyitása ↗</a></p>`:""}`;$("detail-modal").classList.remove("hidden");}

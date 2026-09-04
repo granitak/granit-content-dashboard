@@ -58,3 +58,35 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .author-filter-options input{accent-color:var(--brand)}
 .author-filter-options span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .blog-content-table tr[hidden]{display:none!important}
+
+
+/* 2026-09-02 Phase 1 – executive overview & information architecture */
+.executive-briefing{margin-bottom:18px}
+.overview-section-title{margin-top:0}
+.briefing-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.briefing-card{display:grid;grid-template-columns:38px 1fr;gap:12px;align-items:flex-start;padding:18px;border:1px solid rgba(16,45,49,.08);border-radius:16px;background:#fff;box-shadow:var(--shadow)}
+.briefing-card p:last-child{margin:0;color:var(--ink-soft);font-size:12px;line-height:1.6}
+.briefing-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:15px;font-weight:900;background:#eaf3f1;color:var(--brand)}
+.briefing-card.worked .briefing-icon{background:#dcfae6;color:var(--success)}
+.briefing-card.watch .briefing-icon{background:#fef0c7;color:var(--warning)}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(340px,.95fr);gap:15px;margin-bottom:15px}
+.overview-channel-list{display:grid}
+.overview-channel-row{width:100%;display:grid;grid-template-columns:10px minmax(130px,1fr) minmax(100px,.55fr) minmax(92px,.4fr) 18px;gap:12px;align-items:center;padding:13px 4px;border-bottom:1px solid #edf2f1;background:transparent;color:var(--ink);text-align:left;border-radius:0}
+.overview-channel-row:last-child{border-bottom:0}
+.overview-channel-row:hover{background:#f7fbfa}
+.channel-dot{width:8px;height:8px;border-radius:50%}
+.overview-channel-name strong,.overview-channel-name small,.overview-channel-value strong,.overview-channel-value small{display:block}
+.overview-channel-name strong{font-size:12px}.overview-channel-name small,.overview-channel-value small{margin-top:3px;color:var(--muted);font-size:10px;font-weight:500}
+.overview-channel-value{text-align:right}.overview-channel-value strong{font-size:14px}
+.overview-channel-delta{text-align:right;font-size:11px}.overview-channel-arrow{font-size:22px;color:var(--line-dark)}
+.overview-story-list{display:grid;gap:10px}
+.overview-story-card{padding:14px;border:1px solid var(--line);border-radius:13px;background:#fbfdfc}
+.overview-story-card h3{margin:0;font-size:14px;line-height:1.35}
+.overview-story-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.story-count{min-width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:var(--accent-soft);color:var(--brand);font-size:11px;font-weight:900}
+.overview-story-metrics{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;color:var(--muted);font-size:10px}
+.overview-story-metrics strong{color:var(--ink);font-size:12px}
+.text-button{padding:0;background:transparent;color:var(--brand-2);font-size:11px;font-weight:800;white-space:nowrap}
+.text-button:hover{text-decoration:underline}
+@media(max-width:1050px){.briefing-grid{grid-template-columns:1fr}.overview-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.overview-channel-row{grid-template-columns:8px 1fr auto 18px}.overview-channel-delta{display:none}.overview-channel-value{min-width:88px}.briefing-card{grid-template-columns:32px 1fr;padding:15px}.briefing-icon{width:30px;height:30px}}
