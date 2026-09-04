@@ -107,3 +107,23 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
   line-height:1.5!important;
   color:var(--ink-soft);
 }
+
+/* Phase 3 – Hybrid Story Engine */
+.story-link-button,.story-card-button{font:inherit;color:inherit;text-align:left;width:100%;cursor:pointer}
+.story-link-button{appearance:none}
+.story-card-button{appearance:none;display:block;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
+.story-card-button:hover,.story-link-button:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(16,45,49,.07);border-color:#c7d8d4}
+.story-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.story-card-head>div{min-width:0}
+.story-summary{font-size:11px;line-height:1.5;color:var(--ink-soft);margin:10px 0 0;min-height:32px}
+.story-action{display:inline-flex;align-items:center;padding:5px 8px;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap}
+.story-action.warning{background:#fef0c7;color:#b54708}.story-action.danger{background:#fee4e2;color:#b42318}
+.story-source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin-top:10px}
+.story-source-card{padding:12px;border:1px solid var(--line);border-radius:11px;background:#f8fbfa;display:grid;gap:4px}
+.story-source-card strong{font-size:12px}.story-source-card b{font-size:13px}.story-source-card span{font-size:10px;color:var(--muted)}
+.story-timeline{display:grid;gap:8px;margin-top:10px}
+.story-timeline-item{appearance:none;width:100%;border:1px solid var(--line);border-radius:11px;background:#fff;padding:11px;display:grid;grid-template-columns:88px 1fr;gap:11px;text-align:left;cursor:pointer;color:inherit}
+.story-timeline-item:hover{background:#f8fbfa;border-color:#c7d8d4}
+.story-timeline-date{font-size:10px;color:var(--muted);padding-top:2px}
+.story-timeline-body{display:grid;gap:3px;min-width:0}.story-timeline-body strong{font-size:9px;color:var(--brand);text-transform:uppercase;letter-spacing:.05em}.story-timeline-body b{font-size:12px;line-height:1.35}.story-timeline-body small{font-size:9px;color:var(--muted);line-height:1.4}
+@media(max-width:700px){.story-timeline-item{grid-template-columns:1fr}.story-timeline-date{padding:0}.story-card-head{display:block}.story-action{margin-top:7px}}
