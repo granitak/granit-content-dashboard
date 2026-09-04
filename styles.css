@@ -95,3 +95,15 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .story-topic-grid{align-items:start}
 .topic-rank-panel{min-height:0}
 .topic-rank-scroll{max-height:330px;overflow-y:auto;overflow-x:hidden;padding-right:6px;overscroll-behavior:contain}
+
+/* Phase 2.1 – compact Observer list preview */
+.observer-summary{
+  display:-webkit-box!important;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  overflow:hidden!important;
+  max-height:3em;
+  margin-top:6px!important;
+  line-height:1.5!important;
+  color:var(--ink-soft);
+}
