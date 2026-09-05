@@ -35,13 +35,14 @@
     youtube: ["VIDEÓ", "YouTube", "Megtekintések, nézési idő, feliratkozók és videóteljesítmény."],
     content: ["TARTALOMADATBÁZIS", "Tartalomkereső", "Minden importált cikk, poszt, videó és hírlevél egy helyen."],
     stories: ["KERESZTCSATORNÁS ELEMZÉS", "Sztorik és elemzés", "Keresztcsatornás történetek, témák és ezek teljesítménye."],
+    ai_analyst: ["AI DÖNTÉSTÁMOGATÁS", "AI elemző", "Kérdezz rá a csatornák, sztorik, teljesítmény és reputáció összefüggéseire a belső adatok alapján."],
     observer: ["MÉDIAFIGYELÉS", "Observer", "Sajtómegjelenések, megszólalások, említések és reputációs jelzések."],
     connections: ["RENDSZERÁLLAPOT", "Adatkapcsolatok", "A collectorok frissessége, hibái és beállítási állapota."],
   };
 
   const state = {
     client: null, user: null, page: location.hash.replace("#", "") || "overview",
-    accounts: [], content: [], metrics: [], syncRuns: [], ai: [], stories: [], storyItems: [], charts: [], loadedAt: null,
+    accounts: [], content: [], metrics: [], syncRuns: [], ai: [], stories: [], storyItems: [], analystMessages: [], analystBusy: false, charts: [], loadedAt: null,
   };
 
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
@@ -546,7 +547,7 @@
     const channelRows=overviewChannelRows(r,p);
     pageContent.innerHTML=`
       <section class="executive-briefing">
-        <div class="section-title overview-section-title"><div><p class="eyebrow">VEZETŐI BRIEFING</p><h2>Mi a fontos most?</h2></div><span class="panel-note">${esc(rangeLabel())}</span></div>
+        <div class="section-title overview-section-title"><div><p class="eyebrow">VEZETŐI BRIEFING</p><h2>Mi a fontos most?</h2></div><div class="overview-briefing-actions"><span class="panel-note">${esc(rangeLabel())}</span><button class="text-button" data-nav-page="ai_analyst">Kérdezd az AI-t →</button></div></div>
         <div class="briefing-grid">
           ${briefingCard("happened","MI TÖRTÉNT?",briefing.happened)}
           ${briefingCard("worked","MI MŰKÖDÖTT?",briefing.worked)}
@@ -702,6 +703,59 @@
     $("story-search").addEventListener("input",update);$("story-filter").addEventListener("change",update);update();
   }
 
+  function analystSuggestionButtons(){
+    return [
+      "Mi működött a legjobban ebben az időszakban, és miért?",
+      "Mely témák teljesítettek jól több csatornán?",
+      "Volt reputációs vagy kommunikációs kockázat az Observerben?",
+      "Mit érdemes megismételnünk a következő hónapban?",
+      "Hol látszik visszaesés vagy kihasználatlan lehetőség?",
+    ].map((q)=>`<button class="analyst-suggestion" data-analyst-question="${esc(q)}">${esc(q)}</button>`).join("");
+  }
+  function analystEvidenceHtml(items=[]){
+    if(!items.length)return "";
+    return `<div class="analyst-evidence"><strong>Felhasznált belső adatok</strong><div class="analyst-evidence-list">${items.map((e)=>{
+      const label=`${e.kind==="story"?"Sztori":e.kind==="aggregate"?"Összesítő":sourceLabel(e.source)} · ${clampText(e.title,95)}`;
+      if(e.kind==="story"&&e.story_id)return `<button class="analyst-evidence-chip" data-story="${esc(e.story_id)}">${esc(label)}</button>`;
+      if(e.kind==="content"&&e.source&&e.external_id)return `<button class="analyst-evidence-chip" data-content="${esc(e.source)}|${esc(e.external_id)}">${esc(label)}</button>`;
+      return `<span class="analyst-evidence-chip static">${esc(label)}</span>`;
+    }).join("")}</div></div>`;
+  }
+  function renderAnalystMessages(){
+    const box=$("analyst-chat");if(!box)return;
+    if(!state.analystMessages.length){box.innerHTML=`<div class="analyst-empty"><span>✦</span><strong>Kérdezz rá az adatokra</strong><p>Az AI a kiválasztott időszak csatornaadatait, tartalmait, Story Engine-kapcsolatait és Observer reputációs jelzéseit használja. Külső webes információt nem ad hozzá.</p></div>`;return;}
+    box.innerHTML=state.analystMessages.map((m)=>{
+      if(m.role==="user")return `<div class="analyst-message user"><div class="analyst-message-label">Te</div><div class="analyst-bubble">${esc(m.content)}</div></div>`;
+      if(m.error)return `<div class="analyst-message assistant error"><div class="analyst-message-label">AI elemző</div><div class="analyst-bubble"><strong>Nem sikerült válaszolni.</strong><p>${esc(m.content)}</p></div></div>`;
+      return `<div class="analyst-message assistant"><div class="analyst-message-label">AI elemző <span class="analyst-confidence">${esc(m.confidence||"közepes")} bizalom</span></div><div class="analyst-bubble"><p class="analyst-answer">${esc(m.content)}</p>${m.key_points?.length?`<ul class="analyst-points">${m.key_points.map((x)=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}${m.caveats?.length?`<div class="analyst-caveats"><strong>Korlátok / megjegyzések</strong>${m.caveats.map((x)=>`<p>${esc(x)}</p>`).join("")}</div>`:""}${analystEvidenceHtml(m.evidence||[])}<div class="analyst-answer-meta">${m.period?.start?`${dateHU(m.period.start)} – `:""}${dateHU(m.period?.end)}${m.model?` · ${esc(m.model.replace("@cf/meta/",""))}`:""}${m.usage?` · ${num(m.usage.queries_today)}/${num(m.usage.daily_limit)} kérdés ma`:""}</div></div></div>`;
+    }).join("");
+    bindContentLinks();bindStoryLinks();box.scrollTop=box.scrollHeight;
+  }
+  async function submitAnalystQuestion(rawQuestion){
+    const question=String(rawQuestion||"").trim();if(!question||state.analystBusy)return;
+    const previous=state.analystMessages.slice(-6).map((m)=>({role:m.role,content:m.content}));
+    state.analystMessages.push({role:"user",content:question});state.analystBusy=true;renderAnalystMessages();
+    const input=$("analyst-input"),button=$("analyst-submit");if(input)input.value="";if(button){button.disabled=true;button.textContent="Elemzés…";}
+    try{
+      const range=selectedRange();
+      const {data,error}=await state.client.functions.invoke("ai-analyst",{body:{question,range_start:range.start?dayKey(range.start):null,range_end:dayKey(range.end),history:previous}});
+      if(error){let message=error.message||"Edge Function hiba";try{if(error.context){const payload=await error.context.json();message=payload?.error||payload?.message||message;}}catch{}throw new Error(message);}
+      if(data?.error)throw new Error(data.error);
+      state.analystMessages.push({role:"assistant",content:data?.answer||"Nem érkezett válasz.",key_points:data?.key_points||[],caveats:data?.caveats||[],evidence:data?.evidence||[],confidence:data?.confidence||"közepes",period:data?.period||{},model:data?.model||"",usage:data?.usage||null});
+    }catch(error){state.analystMessages.push({role:"assistant",content:error?.message||String(error),error:true});}
+    finally{state.analystBusy=false;if(button){button.disabled=false;button.textContent="Kérdezd az AI-t";}renderAnalystMessages();}
+  }
+  function renderAIAnalyst(){
+    const range=selectedRange();
+    pageContent.innerHTML=`<section class="ai-analyst-intro panel"><div><p class="eyebrow">BELSŐ ADATOKRA ÉPÜL</p><h2>Kérdezd az AI-t</h2><p>Az elemző a GRÁNIT dashboard strukturált adataiból válaszol: csatornateljesítmény, konkrét tartalmak, Story Engine és Observer reputációs jelzések. Nem keres a nyilvános weben, és minden válasznál megmutatja a felhasznált belső bizonyítékokat.</p></div><div class="analyst-period"><span>Vizsgált időszak</span><strong>${esc(rangeLabel())}</strong><small>A felső időszakválasztóval módosítható.</small></div></section>
+    <section class="analyst-suggestions">${analystSuggestionButtons()}</section>
+    <article class="panel analyst-panel"><div id="analyst-chat" class="analyst-chat"></div><form id="analyst-form" class="analyst-form"><textarea id="analyst-input" rows="3" maxlength="900" placeholder="Például: Melyik sztorink működött jól több csatornán, és mit tanuljunk belőle?"></textarea><div class="analyst-form-footer"><span>Az AI csak a belső dashboard-adatokból dolgozik.</span><button id="analyst-submit" class="primary-button" type="submit">Kérdezd az AI-t</button></div></form></article>`;
+    renderAnalystMessages();
+    document.querySelectorAll("[data-analyst-question]").forEach((el)=>el.addEventListener("click",()=>submitAnalystQuestion(el.dataset.analystQuestion)));
+    $("analyst-form").addEventListener("submit",(ev)=>{ev.preventDefault();submitAnalystQuestion($("analyst-input").value);});
+    $("analyst-input").addEventListener("keydown",(ev)=>{if((ev.ctrlKey||ev.metaKey)&&ev.key==="Enter"){ev.preventDefault();submitAnalystQuestion($("analyst-input").value);}});
+  }
+
   function observerItems(){return contents(["observer"]).map((c)=>({c,m:c.metadata||{},a:aiFor(c),mentions:contentMetric(c,["media_mentions"]),stories:contentMetric(c,["media_stories"])})).sort((a,b)=>String(b.c.published_at).localeCompare(String(a.c.published_at)));}
   function renderObserver(){
     const items=observerItems(),r=selectedRange(),p=previousRange(),filtered=items.filter((x)=>inRange(x.c.published_at,r)),prevFiltered=p?items.filter((x)=>inRange(x.c.published_at,p)):[];
@@ -731,7 +785,7 @@
   function expectedSources(){return [{id:"wordpress",label:"Grandio – WordPress",source:"blog"},{id:"mailchimp",label:"Mailchimp",source:"mailchimp"},{id:"ga4",label:"Google Analytics 4",source:"blog"},{id:"search_console",label:"Search Console",source:"blog"},{id:"youtube",label:"YouTube",source:"youtube"},{id:"meta",label:"Facebook és Instagram",source:"facebook"},{id:"linkedin",label:"LinkedIn XLS import",source:"linkedin_company"},{id:"observer",label:"Observer Gmail",source:"observer"},{id:"content_ai",label:"Cloudflare Workers AI",source:"observer"},{id:"story_engine",label:"Hybrid Story Engine",source:"blog"}];}
   function renderConnections(){const latest=Object.fromEntries(latestSync().map((x)=>[x.source,x]));pageContent.innerHTML=`<section class="grid-3">${expectedSources().map((e)=>{const r=latest[e.id];let status="missing";if(r){const age=(Date.now()-new Date(r.finished_at||r.started_at))/86400000;status=r.status==="error"?"error":age>3?"stale":"success";}return `<article class="panel"><div class="panel-heading"><div><p class="eyebrow">${esc(e.id.toUpperCase())}</p><h2>${esc(e.label)}</h2></div>${statusBadge(status)}</div>${r?`<p><strong>Utolsó futás:</strong> ${dateTimeHU(r.finished_at||r.started_at)}</p><p><strong>Beírt sorok:</strong> ${num(r.records_written)}</p><p class="muted">${esc(r.message||"")}</p>`:`<div class="empty-state"><strong>Még nem futott le.</strong>Állítsd be a szükséges GitHub secretet és változót, majd indítsd el az Actions fülön.</div>`}</article>`;}).join("")}</section><article class="panel"><div class="panel-heading"><div><p class="eyebrow">ADATBÁZIS</p><h2>Jelenlegi adattartalom</h2></div></div><div class="table-wrap"><table class="sortable-table"><thead><tr><th data-sort-type="text">Forrás</th><th class="num" data-sort-type="number">Fiókok</th><th class="num" data-sort-type="number">Tartalmak</th><th class="num" data-sort-type="number">Mérési sorok</th><th data-sort-type="date">Legutóbbi tartalom</th></tr></thead><tbody>${ALL_SOURCES.map((s)=>{const acc=state.accounts.filter((x)=>x.source===s).length,con=state.content.filter((x)=>x.source===s),met=state.metrics.filter((x)=>x.source===s).length,last=con.sort((a,b)=>String(b.published_at).localeCompare(String(a.published_at)))[0]?.published_at;return `<tr><td data-sort-value="${esc(sourceLabel(s))}">${sourceBadge(s)}</td><td class="num" data-sort-value="${acc}">${num(acc)}</td><td class="num" data-sort-value="${con.length}">${num(con.length)}</td><td class="num" data-sort-value="${met}">${num(met)}</td><td data-sort-value="${esc(last||"")}">${dateHU(last)}</td></tr>`;}).join("")}</tbody></table></div></article>`;}
 
-  function renderPage(){destroyCharts();if(!PAGE_META[state.page])state.page="overview";const meta=PAGE_META[state.page]||PAGE_META.overview;$("page-eyebrow").textContent=meta[0];$("page-title").textContent=meta[1];$("page-subtitle").textContent=meta[2];document.querySelectorAll(".nav-item").forEach((b)=>b.classList.toggle("active",b.dataset.page===state.page));const sourcePages=["linkedin_company","facebook","instagram","youtube"];sourceFilterLabel.classList.add("hidden");if(state.page==="overview")renderOverview();else if(state.page==="newsletter")renderNewsletter();else if(state.page==="blog")renderBlog();else if(sourcePages.includes(state.page))renderPlatform(state.page);else if(state.page==="content")renderContentExplorer();else if(state.page==="stories")renderStories();else if(state.page==="observer")renderObserver();else if(state.page==="connections")renderConnections();else renderOverview();bindContentLinks();bindStoryLinks();bindSortableTables();}
+  function renderPage(){destroyCharts();if(!PAGE_META[state.page])state.page="overview";const meta=PAGE_META[state.page]||PAGE_META.overview;$("page-eyebrow").textContent=meta[0];$("page-title").textContent=meta[1];$("page-subtitle").textContent=meta[2];document.querySelectorAll(".nav-item").forEach((b)=>b.classList.toggle("active",b.dataset.page===state.page));const sourcePages=["linkedin_company","facebook","instagram","youtube"];sourceFilterLabel.classList.add("hidden");if(state.page==="overview")renderOverview();else if(state.page==="newsletter")renderNewsletter();else if(state.page==="blog")renderBlog();else if(sourcePages.includes(state.page))renderPlatform(state.page);else if(state.page==="content")renderContentExplorer();else if(state.page==="stories")renderStories();else if(state.page==="ai_analyst")renderAIAnalyst();else if(state.page==="observer")renderObserver();else if(state.page==="connections")renderConnections();else renderOverview();bindContentLinks();bindStoryLinks();bindSortableTables();}
 
   function bindStoryLinks(){document.querySelectorAll("[data-story]").forEach((el)=>{if(el.dataset.storyBound)return;el.dataset.storyBound="1";el.addEventListener("click",(ev)=>{ev.preventDefault();showStory(el.dataset.story);});});}
   function showStory(storyId){const story=state.stories.find((x)=>String(x.id)===String(storyId));if(!story)return;const x=storySummary(story),sorted=[...x.rows].sort((a,b)=>String(a.c.published_at).localeCompare(String(b.c.published_at))),bySource={};sorted.forEach((row)=>{bySource[row.c.source]??={count:0,exp:0,clicks:0,engagement:0,mentions:0};const v=bySource[row.c.source];v.count++;v.exp+=row.s.exposure;v.clicks+=row.s.clicks;v.engagement+=row.s.engagement;if(row.c.source==="observer")v.mentions+=contentMetric(row.c,["media_mentions"]);});const sourceRows=Object.entries(bySource);$("modal-content").innerHTML=`<p class="eyebrow">KOMMUNIKÁCIÓS SZTORI</p><h2>${esc(story.title)}</h2><div class="modal-meta"><div><span>Időszak</span><strong>${dateHU(story.start_date)}${story.end_date&&story.end_date!==story.start_date?` – ${dateHU(story.end_date)}`:""}</strong></div><div><span>Téma</span><strong>${esc(story.topic||"–")}</strong></div><div><span>Kapcsolt elemek</span><strong>${num(x.rows.length)}</strong></div><div><span>Kapcsolási bizalom</span><strong>${pct(Number(story.confidence||1),0)}</strong></div></div>${story.summary?`<p class="modal-body">${esc(cleanDisplayText(story.summary))}</p>`:""}${x.action!=="Nincs teendő"?`<div class="callout"><strong>Kommunikációs státusz: ${esc(x.action)}</strong><p>Observer reputációs prioritás: ${num(x.priority)}. A részletes indoklás az érintett Observer-elemek megnyitásakor látható.</p></div>`:""}<h3 style="margin-top:18px">Cross-channel teljesítmény</h3><p class="metric-definition">A platformok eredményei nem deduplikált személyek: ugyanaz a felhasználó több csatornán is szerepelhet.</p><div class="story-source-grid">${sourceRows.map(([source,v])=>`<div class="story-source-card"><strong>${esc(sourceLabel(source))}</strong><span>${num(v.count)} tartalom</span>${source==="observer"?`<b>${num(v.mentions)} sajtómegjelenés</b>`:`<b>${num(v.exp,true)} ${esc(primaryMetricLabel(source))}</b><span>${num(v.clicks)} kattintás · ${num(v.engagement)} interakció</span>`}</div>`).join("")}</div><h3 style="margin-top:20px">Sztori idővonala</h3><div class="story-timeline">${sorted.map((row)=>`<button class="story-timeline-item" data-content="${esc(row.c.source)}|${esc(row.c.external_id)}"><span class="story-timeline-date">${dateHU(row.c.published_at)}</span><span class="story-timeline-body"><strong>${esc(sourceLabel(row.c.source))}</strong><b>${esc(clampText(row.c.title,120))}</b><small>${esc(row.ref.relation_type||"kapcsolt")} · ${pct(Number(row.ref.confidence||1),0)} bizalom${row.ref.match_reason?` · ${esc(clampText(row.ref.match_reason,100))}`:""}</small></span></button>`).join("")}</div>`;$("detail-modal").classList.remove("hidden");bindContentLinks();}
