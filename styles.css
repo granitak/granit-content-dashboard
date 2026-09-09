@@ -145,3 +145,39 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .analyst-form{border-top:1px solid rgba(16,45,49,.09);padding:14px 16px;background:#fff}.analyst-form textarea{width:100%;resize:vertical;min-height:76px;max-height:180px;border:1px solid rgba(16,45,49,.14);border-radius:12px;padding:12px 13px;font:inherit;line-height:1.45;outline:none}.analyst-form textarea:focus{border-color:rgba(10,75,85,.55);box-shadow:0 0 0 3px rgba(10,75,85,.06)}.analyst-form-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:10px}.analyst-form-footer span{font-size:12px;color:var(--muted)}.analyst-form-footer button:disabled{opacity:.65;cursor:wait}
 @media(max-width:800px){.ai-analyst-intro{flex-direction:column}.analyst-period{width:100%}.analyst-chat{padding:14px;min-height:390px}.analyst-bubble{max-width:95%}.analyst-form-footer{align-items:flex-end}.analyst-form-footer span{display:none}}
 .overview-briefing-actions{display:flex;align-items:center;gap:13px;flex-wrap:wrap;justify-content:flex-end}
+
+
+/* Phase 4.1 product quality */
+.freshness-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 14px;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(10,75,85,.035);font-size:12px;color:var(--muted)}
+.freshness-strip>span:first-child{font-weight:700;color:var(--text);margin-right:3px}
+.freshness-chip{display:inline-flex;gap:5px;align-items:center;padding:5px 8px;border-radius:999px;background:#fff;border:1px solid var(--line)}
+.story-score{font-weight:800;font-size:14px;padding:7px 9px;border-radius:10px;background:rgba(45,230,140,.14);white-space:nowrap}
+.story-native-metrics{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.story-native-metrics span{font-size:11px;padding:6px 8px;border-radius:8px;background:rgba(10,75,85,.055);color:var(--muted)}
+.story-native-metrics strong{color:var(--text)}
+.story-coverage{display:flex;flex-wrap:wrap;gap:5px;margin:9px 0 12px}
+.story-coverage span{font-size:10px;padding:4px 7px;border-radius:999px;border:1px solid var(--line)}
+.story-coverage .covered{background:rgba(45,230,140,.12);color:#087346}
+.story-coverage .missing{background:rgba(0,0,0,.025);color:var(--muted)}
+.story-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.secondary-button,.danger-button{border:1px solid var(--line);background:#fff;color:var(--text);border-radius:10px;padding:9px 12px;font-weight:700;cursor:pointer}
+.secondary-button:hover{background:rgba(10,75,85,.05)}
+.danger-button{color:#b42318;border-color:rgba(180,35,24,.25)}
+.modal-title-row{display:flex;justify-content:space-between;gap:15px;align-items:flex-start}
+.story-editor-fields{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;margin-bottom:20px}
+.story-editor-fields label{font-size:12px;font-weight:700}
+.story-editor-fields input{display:block;width:100%;margin-top:5px;padding:10px;border:1px solid var(--line);border-radius:9px}
+.story-editor-row,.review-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
+.story-editor-row small,.review-row small{display:block;color:var(--muted);margin-top:4px}
+.story-editor-row p,.review-row p{margin:5px 0 0;color:var(--muted);font-size:12px}
+.story-editor-add-head{margin-top:22px}
+.story-editor-results{max-height:380px;overflow:auto;margin-top:8px}
+.review-list{display:flex;flex-direction:column}
+.review-actions{display:flex;gap:7px;flex-shrink:0}
+.observer-brief-list{display:flex;flex-direction:column}
+.observer-brief-item{width:100%;text-align:left;display:flex;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--line);background:transparent;padding:12px 0;cursor:pointer}
+.observer-brief-item strong{display:block}
+.observer-brief-item small{display:block;color:var(--muted);margin-top:4px}
+.observer-brief-item p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.4}
+.observer-archive-panel{margin-top:15px}
+@media(max-width:760px){.story-editor-fields{grid-template-columns:1fr}.modal-title-row{flex-direction:column}.review-row,.story-editor-row{align-items:flex-start;flex-direction:column}.review-actions{width:100%}}
