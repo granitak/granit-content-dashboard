@@ -929,6 +929,36 @@
 
   function observerItems(){return state.content.filter((c)=>c.source==="observer").map((c)=>({c,m:c.metadata||{},a:aiFor(c),mentions:contentMetric(c,["media_mentions"]),stories:contentMetric(c,["media_stories"])})).sort((a,b)=>String(b.c.published_at).localeCompare(String(a.c.published_at)));}
   function isExpertAppearance(x){return Boolean(x?.a?.routine_expert_commentary)||/interjú|nyilatkozat|megszólal|kommentár|elemzői cikk|szakértő|interview|commentary/i.test(`${x?.a?.mention_type||""} ${x?.m?.mention_type||""} ${x?.m?.depth||""}`);}
+  function observerKeywords(x){
+    // For "miért került be?" prefer the Observer collector's matched entities.
+    // AI key entities / keywords are fallbacks when the mail parser has no explicit entity list.
+    const primary=Array.isArray(x?.m?.entities)?x.m.entities.filter(Boolean):[];
+    const fallback=[
+      ...(Array.isArray(x?.a?.key_entities)?x.a.key_entities:[]),
+      ...(Array.isArray(x?.a?.keywords)?x.a.keywords:[]),
+    ].filter(Boolean);
+    const raw=primary.length?primary:fallback;
+    const seen=new Set(),out=[];
+    for(const value of raw){
+      const text=String(value||"").trim();
+      const key=text.toLocaleLowerCase("hu");
+      if(!text||text.length>80||seen.has(key))continue;
+      seen.add(key);out.push(text);
+    }
+    return out;
+  }
+  function observerKeywordRank(items){
+    const counts=new Map();
+    for(const item of items){
+      const unique=new Set(observerKeywords(item).map((x)=>x.toLocaleLowerCase("hu")));
+      for(const key of unique){
+        const label=observerKeywords(item).find((x)=>x.toLocaleLowerCase("hu")===key)||key;
+        const current=counts.get(key)||{label,count:0};
+        current.count+=1;counts.set(key,current);
+      }
+    }
+    return [...counts.values()].sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,"hu"));
+  }
   function observerRiskItem(x){return Boolean(x?.a?.negative_or_sensitive_framing||x?.a?.communication_action_needed||Number(x?.a?.final_priority||1)>=3);}
   function observerReportKey(x){return String(x?.m?.email_message_key||x?.m?.email_subject||dayKey(x?.c?.published_at)||"");}
   function observerReportDate(x){
@@ -951,7 +981,7 @@
     }
     return [...groups.values()].sort((a,b)=>(b.date?.getTime()||0)-(a.date?.getTime()||0));
   }
-  function observerCompactCard(x){const source=x.m.primary_source||x.c.author||"–",summary=clampText(cleanDisplayText(x.a?.summary_short||x.c.body),190),related=(x.m.related_mentions||[]).length;return `<button class="observer-brief-item" data-content="observer|${esc(x.c.external_id)}"><div><strong>${esc(x.c.title)}</strong><small>${dateHU(x.c.published_at)} · ${esc(source)}${related?` · +${num(related)} kapcsolódó megjelenés`:""}</small>${summary?`<p>${esc(summary)}</p>`:""}</div><span>›</span></button>`;}
+  function observerCompactCard(x){const source=x.m.primary_source||x.c.author||"–",summary=clampText(cleanDisplayText(x.a?.summary_short||x.c.body),190),related=(x.m.related_mentions||[]).length,keywords=observerKeywords(x);return `<button class="observer-brief-item" data-content="observer|${esc(x.c.external_id)}"><div><strong>${esc(x.c.title)}</strong><small>${dateHU(x.c.published_at)} · ${esc(source)}${related?` · +${num(related)} kapcsolódó megjelenés`:""}</small>${keywords.length?`<div class="tags observer-keyword-tags">${keywords.slice(0,6).map((k)=>`<span class="tag">${esc(k)}</span>`).join("")}</div>`:""}${summary?`<p>${esc(summary)}</p>`:""}</div><span>›</span></button>`;}
   function observerFallbackWeeklyBrief(week){
     const experts=week.filter(isExpertAppearance),risks=week.filter(observerRiskItem),mentions=week.reduce((s,x)=>s+x.mentions,0);
     const entities=new Map();experts.forEach((x)=>[...(x.a?.key_entities||[]),...(x.m?.entities||[])].forEach((e)=>{const v=String(e||"").trim();if(v&&v.length<80)entities.set(v,(entities.get(v)||0)+1);}));
@@ -994,29 +1024,27 @@
     const r=sourceDataRange("observer",selectedRange()),p=previousRangeFor(r);
     const currentItems=items.filter((x)=>inRange(x.c.published_at,r));
     const previousItems=p?items.filter((x)=>inRange(x.c.published_at,p)):[];
-    const currentReports=groups.filter((g)=>g.date&&inRange(g.date,r)).length;
-    const previousReports=p?groups.filter((g)=>g.date&&inRange(g.date,p)).length:0;
     const currentMentions=currentItems.reduce((s,x)=>s+x.mentions,0);
     const previousMentions=previousItems.reduce((s,x)=>s+x.mentions,0);
-    const currentExperts=currentItems.filter(isExpertAppearance).length;
-    const previousExperts=previousItems.filter(isExpertAppearance).length;
+    const keywordRows=observerKeywordRank(currentItems);
     const series=dailySeries("observer","exposure",r);
 
-    pageContent.innerHTML=`<section class="kpi-grid">
-      ${kpi("Observer-jelentések",num(currentReports),rangeLabelFor(r),p?delta(currentReports,previousReports):undefined)}
+    pageContent.innerHTML=`<section class="kpi-grid two">
       ${kpi("Történetek",num(currentItems.length),"a kiválasztott időszakban",p?delta(currentItems.length,previousItems.length):undefined)}
       ${kpi("Sajtómegjelenések",num(currentMentions),"a kiválasztott időszakban",p?delta(currentMentions,previousMentions):undefined)}
-      ${kpi("Szakértői / elemzői",num(currentExperts),"a kiválasztott időszakban",p?delta(currentExperts,previousExperts):undefined)}
     </section>
-    <article class="panel"><div class="panel-heading"><div><p class="eyebrow">MEGJELENÉSEK IDŐBEN</p><h2>Observer sajtómegjelenések</h2></div><span class="panel-note">${esc(rangeLabelFor(r))}</span></div><div class="chart-wrap"><canvas id="observer-mentions-chart"></canvas></div><p class="metric-definition">Napi sajtómegjelenések és 7 napos mozgóátlag. Az összehasonlítás a felső KPI-kban az előző azonos időszakhoz történik.</p></article>
+    <section class="grid-2 observer-analysis-grid"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">MEGJELENÉSEK IDŐBEN</p><h2>Observer sajtómegjelenések</h2></div><span class="panel-note">${esc(rangeLabelFor(r))}</span></div><div class="chart-wrap"><canvas id="observer-mentions-chart"></canvas></div><p class="metric-definition">Napi sajtómegjelenések és 7 napos mozgóátlag. A felső KPI-k az előző azonos időszakhoz hasonlítanak.</p></article>
+    <article class="panel observer-keyword-panel"><div class="panel-heading"><div><p class="eyebrow">KULCSSZAVAK</p><h2>Leggyakoribb említések</h2></div><span class="panel-note">${esc(rangeLabelFor(r))}</span></div><div id="observer-keyword-rank" class="rank-list observer-keyword-rank"></div><p class="metric-definition">Egy kulcsszót történetenként egyszer számolunk, így a rangsor nem torzul egyetlen sokszor átvett sajtómegjelenéstől.</p></article></section>
     <section class="grid-2 equal observer-brief-grid" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">LEGFRISSEBB OBSERVER-JELENTÉS</p><h2>${dateHU(latestDate)}</h2></div><span class="panel-note">${num(latestReport.length)} történet</span></div><p class="metric-definition">${esc(latestGroup.subject||"Observer")}</p><div class="observer-brief-list observer-latest-list">${latestReport.map(observerCompactCard).join("")||`<div class="empty-state">Nincs tétel.</div>`}</div></article>
     <article class="panel observer-ai-panel"><div class="panel-heading"><div><p class="eyebrow">AI HETI ÖSSZEFOGLALÓ</p><h2>Mi történt az elmúlt 7 napban?</h2></div><span class="panel-note">${dateHU(weekStart)} – ${dateHU(weekEnd)}</span></div><div id="observer-weekly-ai">${observerWeeklyBriefHtml(null)}</div></article></section>
-    <article class="panel observer-archive-panel"><div class="panel-heading"><div><p class="eyebrow">TELJES ARCHÍVUM</p><h2>Observer-történetek</h2></div></div><div><div class="table-tools"><input id="observer-search" type="search" placeholder="Keresés címben, kivonatban…"><select id="observer-type"><option value="all">Minden történet</option><option value="expert">Csak szakértői/elemzői</option></select></div><div class="table-wrap observer-table-wrap"><table id="observer-table" class="sortable-table observer-table"><thead><tr><th>Dátum</th><th>Cím</th><th>Forrás</th><th>Megjelenések</th></tr></thead><tbody id="observer-body"></tbody></table></div><p id="observer-count" class="metric-definition"></p></div></article>`;
+    <article class="panel observer-archive-panel"><div class="panel-heading"><div><p class="eyebrow">TELJES ARCHÍVUM</p><h2>Observer-történetek</h2></div></div><div><div class="table-tools"><input id="observer-search" type="search" placeholder="Keresés címben, kivonatban…"><select id="observer-type"><option value="all">Minden történet</option><option value="expert">Csak szakértői/elemzői</option></select></div><div class="table-wrap observer-table-wrap"><table id="observer-table" class="sortable-table observer-table observer-keyword-table"><thead><tr><th>Dátum</th><th>Cím</th><th>Forrás</th><th>Kulcsszavak</th><th>Megjelenések</th></tr></thead><tbody id="observer-body"></tbody></table></div><p id="observer-count" class="metric-definition"></p></div></article>`;
 
     lineChart("observer-mentions-chart",series.labels,[{label:"Napi megjelenések",data:series.values,borderColor:"rgba(181,71,8,.42)",backgroundColor:"rgba(181,71,8,.08)",fill:true,pointRadius:0},{label:"7 napos átlag",data:movingAverage(series.values,7),borderColor:SOURCE.observer.color,pointRadius:0,tension:.25}]);
+    const keywordMax=Math.max(1,...keywordRows.map((x)=>x.count));
+    $("observer-keyword-rank").innerHTML=keywordRows.slice(0,16).map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.label)}<small>${num(x.count)} történet</small><div class="progress"><span style="width:${x.count/keywordMax*100}%"></span></div></div><span class="rank-value">${num(x.count)}</span></div>`).join("")||`<div class="empty-state">Nincs felismert kulcsszó a kiválasztott időszakban.</div>`;
     bindContentLinks();loadObserverWeeklyBrief(weekStart,weekEnd,week);
 
-    const update=()=>{const q=$("observer-search").value.trim().toLocaleLowerCase("hu"),type=$("observer-type").value;const rows=items.filter((x)=>(type==="all"||isExpertAppearance(x))&&(!q||`${x.c.title} ${x.c.body} ${x.m.primary_source}`.toLocaleLowerCase("hu").includes(q)));const visibleRows=rows.slice(0,250);$("observer-body").innerHTML=visibleRows.map((x)=>`<tr><td>${dateHU(x.c.published_at)}</td><td><a href="#" data-content="observer|${esc(x.c.external_id)}" class="content-link">${esc(x.c.title)}</a></td><td>${esc(x.m.primary_source||x.c.author||"–")}</td><td class="num">${num(x.mentions)}</td></tr>`).join("")||`<tr><td colspan="4"><div class="empty-state">Nincs találat.</div></td></tr>`;$("observer-count").textContent=`${num(rows.length)} történet${rows.length>250?" · az első 250 látható; keress a továbbiakhoz":""}`;bindContentLinks();};
+    const update=()=>{const q=$("observer-search").value.trim().toLocaleLowerCase("hu"),type=$("observer-type").value;const rows=items.filter((x)=>{const keywords=observerKeywords(x);const hay=`${x.c.title} ${x.c.body} ${x.m.primary_source} ${keywords.join(" ")}`.toLocaleLowerCase("hu");return (type==="all"||isExpertAppearance(x))&&(!q||hay.includes(q));});const visibleRows=rows.slice(0,250);$("observer-body").innerHTML=visibleRows.map((x)=>{const keywords=observerKeywords(x);return `<tr><td>${dateHU(x.c.published_at)}</td><td><a href="#" data-content="observer|${esc(x.c.external_id)}" class="content-link">${esc(x.c.title)}</a></td><td>${esc(x.m.primary_source||x.c.author||"–")}</td><td><div class="tags observer-tags">${keywords.map((k)=>`<span class="tag">${esc(k)}</span>`).join("")||"–"}</div></td><td class="num">${num(x.mentions)}</td></tr>`;}).join("")||`<tr><td colspan="5"><div class="empty-state">Nincs találat.</div></td></tr>`;$("observer-count").textContent=`${num(rows.length)} történet${rows.length>250?" · az első 250 látható; keress a továbbiakhoz":""}`;bindContentLinks();};
     $("observer-search").addEventListener("input",update);$("observer-type").addEventListener("change",update);update();
   }
 
