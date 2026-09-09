@@ -42,7 +42,7 @@
 
   const state = {
     client: null, user: null, page: location.hash.replace("#", "") || "overview",
-    accounts: [], content: [], metrics: [], syncRuns: [], ai: [], stories: [], storyItems: [], manualAssignments: [], reviewQueue: [], analystMessages: [], analystBusy: false, charts: [], loadedAt: null,
+    accounts: [], content: [], metrics: [], syncRuns: [], ai: [], stories: [], storyItems: [], manualAssignments: [], reviewQueue: [], analystMessages: [], analystBusy: false, charts: [], loadedAt: null, indexes: null,
   };
 
   function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
@@ -156,6 +156,67 @@
     pageContent.insertAdjacentHTML("afterbegin",`<div class="freshness-strip"><span>Adatfrissesség</span>${chips}</div>`);
   }
 
+  function contentKey(source, externalId) { return `${source}\u0001${String(externalId ?? "")}`; }
+  function metricContentKey(source, externalId, name) { return `${source}\u0001${String(externalId ?? "")}\u0001${name}`; }
+
+  function buildRuntimeIndexes() {
+    const contentByKey = new Map();
+    const aiByKey = new Map();
+    const storyItemsByStory = new Map();
+    const storyItemByContent = new Map();
+    const storyById = new Map();
+    const manualByContent = new Map();
+    const metricContent = new Map();
+
+    for (const c of state.content) contentByKey.set(contentKey(c.source, c.external_id), c);
+    for (const a of state.ai) aiByKey.set(contentKey(a.source, a.external_id), a);
+    for (const s of state.stories) storyById.set(String(s.id), s);
+    for (const m of state.manualAssignments) manualByContent.set(contentKey(m.source, m.external_id), m);
+
+    for (const ref of state.storyItems) {
+      const sid = String(ref.story_id);
+      if (!storyItemsByStory.has(sid)) storyItemsByStory.set(sid, []);
+      storyItemsByStory.get(sid).push(ref);
+      storyItemByContent.set(contentKey(ref.source, ref.external_id), ref);
+    }
+
+    // Pre-aggregate content-level metrics once. This replaces thousands of repeated
+    // full metric_daily scans during story/observer rendering.
+    for (const row of state.metrics) {
+      const externalId = String(row.content_external_id || "");
+      if (!externalId) continue;
+      const key = metricContentKey(row.source, externalId, row.metric_name);
+      let bucket = metricContent.get(key);
+      if (!bucket) {
+        bucket = { flowSum: 0, snapshotDate: "", snapshotValue: 0, hasSnapshot: false };
+        metricContent.set(key, bucket);
+      }
+      if (row.aggregation_type === "snapshot") {
+        const d = String(row.metric_date || "");
+        if (!bucket.hasSnapshot || d >= bucket.snapshotDate) {
+          bucket.hasSnapshot = true;
+          bucket.snapshotDate = d;
+          bucket.snapshotValue = Number(row.metric_value || 0);
+        }
+      } else {
+        bucket.flowSum += Number(row.metric_value || 0);
+      }
+    }
+
+    state.indexes = {
+      contentByKey, aiByKey, storyItemsByStory, storyItemByContent,
+      storyById, manualByContent, metricContent,
+      exposureCache: new Map(),
+    };
+  }
+
+  function indexedContent(source, externalId) {
+    return state.indexes?.contentByKey.get(contentKey(source, externalId)) || null;
+  }
+  function indexedStory(storyId) {
+    return state.indexes?.storyById.get(String(storyId)) || null;
+  }
+
   async function fetchPaged(table, orderColumn = null, ascending = false) {
     const rows = []; const pageSize = 1000; let from = 0;
     while (true) {
@@ -187,6 +248,7 @@
         fetchOptionalPaged("story_review_queue", "created_at", false),
       ]);
       Object.assign(state, { accounts, content, metrics, syncRuns, ai, stories, storyItems, manualAssignments, reviewQueue, loadedAt: new Date() });
+      buildRuntimeIndexes();
       $("last-refresh").textContent = `Betöltve: ${dateTimeHU(state.loadedAt)}`;
       $("footer-data-note").textContent = `${num(content.length)} tartalom · ${num(metrics.length)} adatsor · ${num(stories.length)} sztori`;
       renderPage();
@@ -205,19 +267,18 @@
     return rows.length ? Number(rows[0].metric_value || 0) : 0;
   }
   function contentMetric(content, names) {
+    if (!content) return 0;
     for (const name of names) {
-      const rows = state.metrics.filter((m) => m.source === content.source && m.metric_name === name && String(m.content_external_id || "") === String(content.external_id));
-      if (!rows.length) continue;
-      const snapshots = rows.filter((r) => r.aggregation_type === "snapshot").sort((a,b) => String(b.metric_date).localeCompare(String(a.metric_date)));
-      if (snapshots.length) return Number(snapshots[0].metric_value || 0);
-      return rows.reduce((s,r) => s + Number(r.metric_value || 0), 0);
+      const bucket = state.indexes?.metricContent.get(metricContentKey(content.source, content.external_id, name));
+      if (!bucket) continue;
+      return bucket.hasSnapshot ? Number(bucket.snapshotValue || 0) : Number(bucket.flowSum || 0);
     }
     return 0;
   }
   function aiFor(sourceOrContent, externalId = null) {
     const source = typeof sourceOrContent === "object" ? sourceOrContent?.source : sourceOrContent;
     const id = typeof sourceOrContent === "object" ? sourceOrContent?.external_id : externalId;
-    return state.ai.find((x)=>x.source===source && String(x.external_id)===String(id)) || null;
+    return state.indexes?.aiByKey.get(contentKey(source, id)) || null;
   }
   function contentPriority(content) {
     const ai = aiFor(content);
@@ -545,8 +606,11 @@
     return `<article class="briefing-card ${kind}"><div class="briefing-icon">${icon}</div><div><p class="eyebrow">${esc(title)}</p><p>${text}</p></div></article>`;
   }
   function storyContentRows(storyId) {
-    const refs=state.storyItems.filter((x)=>String(x.story_id)===String(storyId));
-    return refs.map((ref)=>{const c=state.content.find((x)=>x.source===ref.source&&String(x.external_id)===String(ref.external_id));return c?{c,ref,s:contentStats(c)}:null;}).filter(Boolean);
+    const refs = state.indexes?.storyItemsByStory.get(String(storyId)) || [];
+    return refs.map((ref)=>{
+      const c = indexedContent(ref.source, ref.external_id);
+      return c ? {c, ref, s:contentStats(c)} : null;
+    }).filter(Boolean);
   }
   function storySummary(story) {
     const rows=storyContentRows(story.id), owned=rows.filter((x)=>x.c.source!=="observer"), media=rows.filter((x)=>x.c.source==="observer");
@@ -555,11 +619,26 @@
     return {story,rows,owned,media,channels:[...new Set(rows.map((x)=>x.c.source))],native,mentions:media.reduce((sum,x)=>sum+contentMetric(x.c,["media_mentions"]),0)};
   }
   function storiesInRange(range=selectedRange()) { return state.stories.filter((s)=>inRange(`${s.end_date||s.start_date}T12:00:00`,range)).map(storySummary); }
-  function sourcePercentile(source,value,range=selectedRange()) {
+  function percentileCacheKey(source, range) {
+    const a = range?.start ? dayKey(range.start) : "all";
+    const b = range?.end ? dayKey(range.end) : "now";
+    return `${source}|${a}|${b}`;
+  }
+  function exposureValuesForSource(source,range=selectedRange()) {
+    const key=percentileCacheKey(source,range);
+    const cache=state.indexes?.exposureCache;
+    if(cache?.has(key)) return cache.get(key);
     const vals=contents([source],range).map((c)=>contentStats(c).exposure).filter((v)=>v>0).sort((a,b)=>a-b);
+    cache?.set(key,vals);
+    return vals;
+  }
+  function sourcePercentile(source,value,range=selectedRange()) {
+    const vals=exposureValuesForSource(source,range);
     if(!vals.length||value<=0)return 0;
-    let count=0;for(const v of vals)if(v<=value)count++;
-    return Math.round(count/vals.length*100);
+    // binary search: number of values <= requested value
+    let lo=0,hi=vals.length;
+    while(lo<hi){const mid=(lo+hi)>>1;if(vals[mid]<=value)lo=mid+1;else hi=mid;}
+    return Math.round(lo/vals.length*100);
   }
   function storyPerformanceScore(x,range=selectedRange()) {
     const scores=Object.entries(x.native).map(([source,v])=>sourcePercentile(source,Number(v.exposure||0),range)).filter((v)=>v>0);
@@ -573,7 +652,7 @@
     const rows=Object.entries(x.native).sort((a,b)=>Number(b[1].exposure)-Number(a[1].exposure)).slice(0,limit);
     return `<div class="story-native-metrics">${rows.map(([source,v])=>`<span><strong>${num(v.exposure,true)}</strong> ${esc(primaryMetricLabel(source))} · ${esc(SOURCE[source]?.short||source)}</span>`).join("")}${x.mentions?`<span><strong>${num(x.mentions)}</strong> sajtómegjelenés</span>`:""}</div>`;
   }
-  function manualAssignmentFor(content){return state.manualAssignments.find((x)=>x.source===content.source&&String(x.external_id)===String(content.external_id))||null;}
+  function manualAssignmentFor(content){return state.indexes?.manualByContent.get(contentKey(content.source,content.external_id))||null;}
   function pendingReviewRows(){return state.reviewQueue.filter((x)=>x.status==="pending");}
   function overviewStoryCards(range) {
     const stories=storiesInRange(range).filter((x)=>x.rows.length>1||x.channels.length>1).sort((a,b)=>storyScore(b,range)-storyScore(a,range)).slice(0,3);
@@ -721,8 +800,9 @@
   function renderContentExplorer() {
     pageContent.innerHTML=`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">KERESÉS ÉS SZŰRÉS</p><h2>Minden tartalom</h2></div><div class="table-tools"><input id="content-search" type="search" placeholder="Keresés címben, szerzőben…"><select id="content-source"><option value="all">Minden csatorna</option>${ALL_SOURCES.map((s)=>`<option value="${s}">${SOURCE[s].label}</option>`).join("")}</select><select id="content-sort"><option value="date">Legfrissebb</option><option value="exposure">Legnagyobb elsődleges eredmény</option><option value="clicks">Legtöbb kattintás</option><option value="engagement">Legtöbb interakció</option></select></div></div><div class="table-wrap"><table id="explorer-table" class="sortable-table"><thead><tr><th data-sort-type="text">Tartalom</th><th data-sort-type="text">Csatorna</th><th data-sort-type="text">Típus</th><th data-sort-type="date">Dátum</th><th class="num" data-sort-type="number">Elsődleges eredmény</th><th class="num" data-sort-type="number">Kattintás</th><th class="num" data-sort-type="number">Interakció</th></tr></thead><tbody id="explorer-body"></tbody></table></div><p id="explorer-count" class="metric-definition"></p></article>`;
     const update=()=>{const q=$("content-search").value.trim().toLocaleLowerCase("hu"),src=$("content-source").value,sort=$("content-sort").value;let items=contents(src==="all"?ALL_SOURCES:[src]).filter((c)=>!q||`${c.title} ${c.author} ${c.body}`.toLocaleLowerCase("hu").includes(q)).map((c)=>({c,s:contentStats(c)}));items.sort((a,b)=>sort==="date"?String(b.c.published_at).localeCompare(String(a.c.published_at)):b.s[sort]-a.s[sort]);
-      $("explorer-body").innerHTML=items.map(({c,s})=>`<tr><td data-sort-value="${esc(c.title||"")}"><a href="#" class="content-link" data-content="${esc(c.source)}|${esc(c.external_id)}">${esc(clampText(c.title,95))}</a><div class="metric-definition">${esc(c.author||"")}</div></td><td data-sort-value="${esc(sourceLabel(c.source))}">${sourceBadge(c.source)}</td><td data-sort-value="${esc(c.content_type||"tartalom")}">${esc(c.content_type||"tartalom")}</td><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td class="num" data-sort-value="${Number(s.exposure||0)}">${num(s.exposure)}<div class="metric-definition">${esc(primaryMetricLabel(c.source))}</div></td><td class="num" data-sort-value="${Number(s.clicks||0)}">${num(s.clicks)}</td><td class="num" data-sort-value="${Number(s.engagement||0)}">${num(s.engagement)}</td></tr>`).join("")||`<tr><td colspan="7"><div class="empty-state">Nincs megfelelő találat.</div></td></tr>`;
-      $("explorer-count").textContent=`${num(items.length)} találat · minden találat megjelenítve`;bindContentLinks();applyCurrentTableSort($("explorer-table"));};
+      const visibleItems=items.slice(0,250);
+      $("explorer-body").innerHTML=visibleItems.map(({c,s})=>`<tr><td data-sort-value="${esc(c.title||"")}"><a href="#" class="content-link" data-content="${esc(c.source)}|${esc(c.external_id)}">${esc(clampText(c.title,95))}</a><div class="metric-definition">${esc(c.author||"")}</div></td><td data-sort-value="${esc(sourceLabel(c.source))}">${sourceBadge(c.source)}</td><td data-sort-value="${esc(c.content_type||"tartalom")}">${esc(c.content_type||"tartalom")}</td><td data-sort-value="${esc(c.published_at||"")}">${dateHU(c.published_at)}</td><td class="num" data-sort-value="${Number(s.exposure||0)}">${num(s.exposure)}<div class="metric-definition">${esc(primaryMetricLabel(c.source))}</div></td><td class="num" data-sort-value="${Number(s.clicks||0)}">${num(s.clicks)}</td><td class="num" data-sort-value="${Number(s.engagement||0)}">${num(s.engagement)}</td></tr>`).join("")||`<tr><td colspan="7"><div class="empty-state">Nincs megfelelő találat.</div></td></tr>`;
+      $("explorer-count").textContent=`${num(items.length)} találat${items.length>250?" · az első 250 látható; keress vagy szűrj a továbbiakhoz":" · minden találat megjelenítve"}`;bindContentLinks();applyCurrentTableSort($("explorer-table"));};
     [$("content-search"),$("content-source"),$("content-sort")].forEach((el)=>el.addEventListener(el.tagName==="INPUT"?"input":"change",update));update();
   }
 
@@ -733,14 +813,14 @@
     const topics={};stories.forEach((x)=>{const t=x.story.topic||topicFor(x.rows[0]?.c||{});topics[t]??={count:0,score:0,mentions:0};topics[t].count++;topics[t].score+=storyPerformanceScore(x,range);topics[t].mentions+=x.mentions;});
     const topicRows=Object.entries(topics).map(([name,v])=>({name,...v,avg:v.count?Math.round(v.score/v.count):0})).sort((a,b)=>b.avg-a.avg||b.count-a.count);
     pageContent.innerHTML=`<section class="kpi-grid">${kpi("Aktív sztorik",num(stories.length),"a kiválasztott időszakban")}${kpi("Többcsatornás",num(multi),"legalább két saját csatorna")}${kpi("Earned media",num(mediaStories),"Observerrel összekapcsolt sztorik")}${kpi("Ellenőrzésre vár",num(reviews.length),"bizonytalan automatikus kapcsolatok")}</section>
-    ${reviews.length?`<article class="panel story-review-panel"><div class="panel-heading"><div><p class="eyebrow">STORY REVIEW QUEUE</p><h2>Bizonytalan kapcsolatok</h2></div><span class="panel-note">emberi döntés felülírja az AI-t</span></div><div class="review-list">${reviews.slice(0,12).map((r)=>{const c=state.content.find((x)=>x.source===r.source&&String(x.external_id)===String(r.external_id)),s=state.stories.find((x)=>String(x.id)===String(r.suggested_story_id));return `<div class="review-row"><div><strong>${esc(c?.title||r.external_id)}</strong><small>${esc(sourceLabel(r.source))} → javasolt sztori: ${esc(s?.title||r.suggested_story_id)} · szemantikus egyezés ${pct(Number(r.similarity||0),0)}</small><p>${esc(clampText(r.reason||"",180))}</p></div><div class="review-actions"><button class="secondary-button" data-review="${r.id}" data-decision="reject">Nem</button><button class="primary-button" data-review="${r.id}" data-decision="accept">Kapcsolódik</button></div></div>`;}).join("")}</div></article>`:""}
+    ${reviews.length?`<article class="panel story-review-panel"><div class="panel-heading"><div><p class="eyebrow">STORY REVIEW QUEUE</p><h2>Bizonytalan kapcsolatok</h2></div><span class="panel-note">emberi döntés felülírja az AI-t</span></div><div class="review-list">${reviews.slice(0,12).map((r)=>{const c=indexedContent(r.source,r.external_id),s=indexedStory(r.suggested_story_id);return `<div class="review-row"><div><strong>${esc(c?.title||r.external_id)}</strong><small>${esc(sourceLabel(r.source))} → javasolt sztori: ${esc(s?.title||r.suggested_story_id)} · szemantikus egyezés ${pct(Number(r.similarity||0),0)}</small><p>${esc(clampText(r.reason||"",180))}</p></div><div class="review-actions"><button class="secondary-button" data-review="${r.id}" data-decision="reject">Nem</button><button class="primary-button" data-review="${r.id}" data-decision="accept">Kapcsolódik</button></div></div>`;}).join("")}</div></article>`:""}
     <section class="grid-2 equal story-topic-grid" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">TÉMATELJESÍTMÉNY</p><h2>Átlagos sztori-score</h2></div></div><div class="chart-wrap"><canvas id="topic-chart"></canvas></div><p class="metric-definition">0–100-as normalizált score: minden sztorit a saját csatornáinak tartalmaihoz viszonyítunk. Nem adunk össze különböző natív KPI-kat.</p></article><article class="panel topic-rank-panel"><div class="panel-heading"><div><p class="eyebrow">TÉMARANGSOR</p><h2>Témák teljesítménye</h2></div><span class="panel-note">görgethető teljes lista</span></div><div id="topic-rank" class="rank-list topic-rank-scroll"></div></article></section>
     <div class="section-title"><div><p class="eyebrow">STORY GRAPH</p><h2>Kommunikációs sztorik</h2></div><div class="story-toolbar"><button id="new-story-button" class="secondary-button">+ Új sztori</button><div class="table-tools"><input id="story-search" type="search" placeholder="Keresés sztoriban…"><select id="story-filter"><option value="all">Minden sztori</option><option value="multi">Többcsatornás</option><option value="media">Observerrel</option></select></div></div></div><section id="story-grid" class="grid-3"></section><p id="story-count" class="metric-definition"></p>`;
     barChart("topic-chart",topicRows.slice(0,8).map((x)=>x.name),topicRows.slice(0,8).map((x)=>x.avg),topicRows.slice(0,8).map((_,i)=>["#0a4b55","#13707d","#2de68c","#b54708","#2867b2","#9b59b6","#7ba7a2","#526b6e"][i]));
     const max=Math.max(1,...topicRows.map((x)=>x.avg));$("topic-rank").innerHTML=topicRows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} sztori · ${num(x.mentions)} sajtómegjelenés</small><div class="progress"><span style="width:${x.avg/max*100}%"></span></div></div><span class="rank-value">${num(x.avg)}/100</span></div>`).join("")||`<div class="empty-state">A Story Engine első futása után jelenik meg.</div>`;
     const update=()=>{const q=$("story-search").value.trim().toLocaleLowerCase("hu"),filter=$("story-filter").value;const rows=stories.filter((x)=>{if(q&&!`${x.story.title} ${x.story.topic} ${x.story.summary}`.toLocaleLowerCase("hu").includes(q))return false;if(filter==="multi"&&x.channels.filter((s)=>s!=="observer").length<2)return false;if(filter==="media"&&!x.media.length)return false;return true;});
-      $("story-grid").innerHTML=rows.map((x)=>`<button class="story-card story-card-button" data-story="${esc(x.story.id)}"><div class="story-card-head"><div><h3>${esc(clampText(x.story.title,105))}</h3><p class="muted">${dateHU(x.story.start_date)}${x.story.end_date&&x.story.end_date!==x.story.start_date?` – ${dateHU(x.story.end_date)}`:""} · ${esc(x.story.topic||"Egyéb")}</p></div><span class="story-score">${num(storyPerformanceScore(x,range))}/100</span></div><div class="story-meta">${x.channels.map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><p class="story-summary">${esc(clampText(x.story.summary||"",180))}</p>${storyNativeMetricsHtml(x,3)}${storyCoverageHtml(x)}<div class="story-stats"><div><strong>${num(x.channels.filter((s)=>s!=="observer").length)}</strong><span>saját csatorna</span></div><div><strong>${num(x.mentions)}</strong><span>sajtómegjelenés</span></div><div><strong>${num(x.rows.length)}</strong><span>kapcsolt elem</span></div></div></button>`).join("")||`<div class="empty-state"><strong>Nincs megfelelő sztori.</strong>A Story Engine futása után itt automatikusan megjelennek a kapcsolatok.</div>`;
-      $("story-count").textContent=`${num(rows.length)} sztori · ${num(rows.reduce((s,x)=>s+x.rows.length,0))} kapcsolt tartalom`;bindStoryLinks();};
+      const visibleRows=rows.slice(0,180);$("story-grid").innerHTML=visibleRows.map((x)=>`<button class="story-card story-card-button" data-story="${esc(x.story.id)}"><div class="story-card-head"><div><h3>${esc(clampText(x.story.title,105))}</h3><p class="muted">${dateHU(x.story.start_date)}${x.story.end_date&&x.story.end_date!==x.story.start_date?` – ${dateHU(x.story.end_date)}`:""} · ${esc(x.story.topic||"Egyéb")}</p></div><span class="story-score">${num(storyPerformanceScore(x,range))}/100</span></div><div class="story-meta">${x.channels.map((s)=>`<span class="story-channel">${esc(SOURCE[s]?.short||s)}</span>`).join("")}</div><p class="story-summary">${esc(clampText(x.story.summary||"",180))}</p>${storyNativeMetricsHtml(x,3)}${storyCoverageHtml(x)}<div class="story-stats"><div><strong>${num(x.channels.filter((s)=>s!=="observer").length)}</strong><span>saját csatorna</span></div><div><strong>${num(x.mentions)}</strong><span>sajtómegjelenés</span></div><div><strong>${num(x.rows.length)}</strong><span>kapcsolt elem</span></div></div></button>`).join("")||`<div class="empty-state"><strong>Nincs megfelelő sztori.</strong>A Story Engine futása után itt automatikusan megjelennek a kapcsolatok.</div>`;
+      $("story-count").textContent=`${num(rows.length)} sztori · ${num(rows.reduce((s,x)=>s+x.rows.length,0))} kapcsolt tartalom${rows.length>180?" · az első 180 sztori látható; keress vagy szűrj a továbbiakhoz":""}`;bindStoryLinks();};
     $("story-search").addEventListener("input",update);$("story-filter").addEventListener("change",update);$("new-story-button").addEventListener("click",createManualStory);bindReviewActions();update();
   }
 
@@ -815,7 +895,7 @@
     bindContentLinks();
     const archive=$("observer-archive"),toggle=$("observer-archive-toggle");
     toggle.addEventListener("click",()=>{archive.classList.toggle("hidden");toggle.textContent=archive.classList.contains("hidden")?"Archívum megnyitása":"Archívum bezárása";});
-    const update=()=>{const q=$("observer-search").value.trim().toLocaleLowerCase("hu"),type=$("observer-type").value;const rows=items.filter((x)=>(type==="all"||isExpertAppearance(x))&&(!q||`${x.c.title} ${x.c.body} ${x.m.primary_source}`.toLocaleLowerCase("hu").includes(q)));$("observer-body").innerHTML=rows.map((x)=>`<tr><td>${dateHU(x.c.published_at)}</td><td><a href="#" data-content="observer|${esc(x.c.external_id)}" class="content-link">${esc(x.c.title)}</a></td><td>${esc(x.m.primary_source||x.c.author||"–")}</td><td class="num">${num(x.mentions)}</td></tr>`).join("")||`<tr><td colspan="4"><div class="empty-state">Nincs találat.</div></td></tr>`;$("observer-count").textContent=`${num(rows.length)} történet`;bindContentLinks();};
+    const update=()=>{const q=$("observer-search").value.trim().toLocaleLowerCase("hu"),type=$("observer-type").value;const rows=items.filter((x)=>(type==="all"||isExpertAppearance(x))&&(!q||`${x.c.title} ${x.c.body} ${x.m.primary_source}`.toLocaleLowerCase("hu").includes(q)));const visibleRows=rows.slice(0,250);$("observer-body").innerHTML=visibleRows.map((x)=>`<tr><td>${dateHU(x.c.published_at)}</td><td><a href="#" data-content="observer|${esc(x.c.external_id)}" class="content-link">${esc(x.c.title)}</a></td><td>${esc(x.m.primary_source||x.c.author||"–")}</td><td class="num">${num(x.mentions)}</td></tr>`).join("")||`<tr><td colspan="4"><div class="empty-state">Nincs találat.</div></td></tr>`;$("observer-count").textContent=`${num(rows.length)} történet${rows.length>250?" · az első 250 látható":""}`;bindContentLinks();};
     $("observer-search").addEventListener("input",update);$("observer-type").addEventListener("change",update);update();
   }
 
@@ -826,7 +906,7 @@
 
   function bindStoryLinks(){document.querySelectorAll("[data-story]").forEach((el)=>{if(el.dataset.storyBound)return;el.dataset.storyBound="1";el.addEventListener("click",(ev)=>{ev.preventDefault();showStory(el.dataset.story);});});}
   function showStory(storyId){
-    const story=state.stories.find((x)=>String(x.id)===String(storyId));if(!story)return;const x=storySummary(story),sorted=[...x.rows].sort((a,b)=>String(a.c.published_at).localeCompare(String(b.c.published_at))),bySource={};
+    const story=indexedStory(storyId);if(!story)return;const x=storySummary(story),sorted=[...x.rows].sort((a,b)=>String(a.c.published_at).localeCompare(String(b.c.published_at))),bySource={};
     sorted.forEach((row)=>{bySource[row.c.source]??={count:0,exp:0,clicks:0,engagement:0,mentions:0};const v=bySource[row.c.source];v.count++;v.exp+=row.s.exposure;v.clicks+=row.s.clicks;v.engagement+=row.s.engagement;if(row.c.source==="observer")v.mentions+=contentMetric(row.c,["media_mentions"]);});
     const sourceRows=Object.entries(bySource);
     $("modal-content").innerHTML=`<div class="modal-title-row"><div><p class="eyebrow">KOMMUNIKÁCIÓS SZTORI</p><h2>${esc(story.title)}</h2></div><button class="secondary-button" id="story-edit-button">Sztori szerkesztése</button></div><div class="modal-meta"><div><span>Időszak</span><strong>${dateHU(story.start_date)}${story.end_date&&story.end_date!==story.start_date?` – ${dateHU(story.end_date)}`:""}</strong></div><div><span>Téma</span><strong>${esc(story.topic||"–")}</strong></div><div><span>Kapcsolt elemek</span><strong>${num(x.rows.length)}</strong></div><div><span>Teljesítmény score</span><strong>${num(storyPerformanceScore(x))}/100</strong></div></div>${story.summary?`<p class="modal-body">${esc(cleanDisplayText(story.summary))}</p>`:""}<h3 style="margin-top:18px">Csatornánkénti natív teljesítmény</h3><p class="metric-definition">A különböző csatornák natív KPI-jait nem adjuk össze.</p><div class="story-source-grid">${sourceRows.map(([source,v])=>`<div class="story-source-card"><strong>${esc(sourceLabel(source))}</strong><span>${num(v.count)} tartalom</span>${source==="observer"?`<b>${num(v.mentions)} sajtómegjelenés</b>`:`<b>${num(v.exp,true)} ${esc(primaryMetricLabel(source))}</b><span>${num(v.clicks)} kattintás · ${num(v.engagement)} interakció</span>`}</div>`).join("")}</div><h3 style="margin-top:18px">Terjesztési lefedettség</h3>${storyCoverageHtml(x)}<h3 style="margin-top:20px">Sztori idővonala</h3><div class="story-timeline">${sorted.map((row)=>`<button class="story-timeline-item" data-content="${esc(row.c.source)}|${esc(row.c.external_id)}"><span class="story-timeline-date">${dateHU(row.c.published_at)}</span><span class="story-timeline-body"><strong>${esc(sourceLabel(row.c.source))}</strong><b>${esc(clampText(row.c.title,120))}</b><small>${esc(row.ref.relation_type||"kapcsolt")}${row.ref.manual_locked?" · kézzel rögzítve":""} · ${pct(Number(row.ref.confidence||1),0)} bizalom</small></span></button>`).join("")}</div>`;
@@ -838,7 +918,7 @@
     try{const id=await rpcCall("story_create_manual",{p_title:title,p_topic:""});await loadData(false);showStoryEditor(id);}catch(error){showToast(`Hiba: ${error.message||error}`);}
   }
   function showStoryEditor(storyId){
-    const story=state.stories.find((x)=>String(x.id)===String(storyId));if(!story)return;const rows=storyContentRows(storyId),linkedKeys=new Set(rows.map((x)=>`${x.c.source}|${x.c.external_id}`));
+    const story=indexedStory(storyId);if(!story)return;const rows=storyContentRows(storyId),linkedKeys=new Set(rows.map((x)=>`${x.c.source}|${x.c.external_id}`));
     $("modal-content").innerHTML=`<p class="eyebrow">KÉZI STORY EDITOR</p><div class="story-editor-fields"><label>Cím<input id="story-edit-title" value="${esc(story.title||"")}"></label><label>Téma<input id="story-edit-topic" value="${esc(story.topic||"")}"></label><button id="story-meta-save" class="primary-button">Cím és téma mentése</button></div><div class="panel-heading"><div><p class="eyebrow">KAPCSOLT TARTALMAK</p><h3>${num(rows.length)} elem</h3></div></div><div class="story-editor-linked">${rows.map((row)=>`<div class="story-editor-row"><div><strong>${esc(row.c.title)}</strong><small>${esc(sourceLabel(row.c.source))} · ${dateHU(row.c.published_at)}${row.ref.manual_locked?" · kézzel rögzítve":""}</small></div><button class="danger-button" data-story-remove="${esc(row.c.source)}|${esc(row.c.external_id)}">Eltávolítás</button></div>`).join("")||`<div class="empty-state">A sztori jelenleg üres.</div>`}</div><div class="panel-heading story-editor-add-head"><div><p class="eyebrow">TARTALOM HOZZÁADÁSA / ÁTHELYEZÉSE</p><h3>Bármelyik csatornáról</h3></div></div><div class="table-tools"><input id="story-add-search" type="search" placeholder="Keresés címben…"><select id="story-add-source"><option value="all">Minden csatorna</option>${ALL_SOURCES.map((s)=>`<option value="${s}">${esc(sourceLabel(s))}</option>`).join("")}</select></div><div id="story-add-results" class="story-editor-results"></div>`;
     $("story-meta-save").addEventListener("click",async()=>{try{await rpcCall("story_update_metadata",{p_story_id:storyId,p_title:$("story-edit-title").value,p_topic:$("story-edit-topic").value});showToast("Sztori frissítve.");await loadData(false);showStoryEditor(storyId);}catch(error){showToast(`Hiba: ${error.message||error}`);}});
     document.querySelectorAll("[data-story-remove]").forEach((b)=>b.addEventListener("click",async()=>{const [source,...rest]=b.dataset.storyRemove.split("|");if(!confirm("Biztosan eltávolítod ezt a tartalmat a sztoriból?"))return;try{await rpcCall("story_set_assignment",{p_source:source,p_external_id:rest.join("|"),p_story_id:null});await loadData(false);showStoryEditor(storyId);}catch(error){showToast(`Hiba: ${error.message||error}`);}}));
@@ -849,7 +929,7 @@
     function bindContentLinks(){document.querySelectorAll("[data-content]").forEach((el)=>{if(el.dataset.bound)return;el.dataset.bound="1";el.addEventListener("click",(ev)=>{ev.preventDefault();const [source,...rest]=el.dataset.content.split("|");showContent(source,rest.join("|"));});});}
 
   function showContent(source,id){
-    const c=state.content.find((x)=>x.source===source&&String(x.external_id)===String(id));if(!c)return;const s=contentStats(c),m=c.metadata||{},a=aiFor(c),entityTags=contentEntities(c),storyRef=state.storyItems.find((x)=>x.source===source&&String(x.external_id)===String(id));
+    const c=indexedContent(source,id);if(!c)return;const s=contentStats(c),m=c.metadata||{},a=aiFor(c),entityTags=contentEntities(c),storyRef=state.indexes?.storyItemByContent.get(contentKey(source,id))||null;
     const observerAi=c.source==="observer"&&a&&a.status==="success"?`<div class="callout"><strong>AI összefoglaló</strong>${a.topic?`<p><strong>Téma:</strong> ${esc(a.topic)}</p>`:""}${a.summary_long||a.summary_short?`<p>${esc(cleanDisplayText(a.summary_long||a.summary_short))}</p>`:""}</div>`:"";
     $("modal-content").innerHTML=`<p class="eyebrow">${esc(sourceLabel(c.source))}</p><h2>${esc(c.title)}</h2><div class="modal-meta"><div><span>Publikálás</span><strong>${dateHU(c.published_at)}</strong></div><div><span>Szerző / forrás</span><strong>${esc(c.author||m.primary_source||"–")}</strong></div><div><span>${esc(primaryMetricLabel(c.source))}</span><strong>${num(s.exposure)}</strong></div><div><span>Kattintás · interakció</span><strong>${num(s.clicks)} · ${num(s.engagement)}</strong></div></div><div class="tags">${(entityTags||[]).map((x)=>`<span class="tag">${esc(x)}</span>`).join("")}</div>${observerAi}<h3 style="margin-top:18px">${c.source==="observer"?"Teljes Observer-kivonat":"Tartalom"}</h3><p class="modal-body">${esc(c.source==="observer"?cleanDisplayText(c.body||"Nincs kivonat."):(c.body||"Nincs kivonat."))}</p>${m.depth?`<div class="callout"><strong>Megjelenítés mélysége</strong><p>${esc(cleanDisplayText(m.depth))}</p></div>`:""}${a?.facts?.length?`<h3 style="margin-top:18px">AI által kiemelt fő pontok</h3><div class="insight-list">${a.facts.map((x)=>`<div class="insight"><p>${esc(x)}</p></div>`).join("")}</div>`:""}${m.related_mentions?.length?`<h3 style="margin-top:18px">Hasonló megjelenések</h3><div class="insight-list">${m.related_mentions.map((x)=>`<div class="insight"><strong>${esc(x.source||"Kapcsolódó forrás")}</strong><p>${esc(x.title||"")}${x.url?` · ${esc(x.url)}`:""}</p></div>`).join("")}</div>`:""}${storyRef?`<p style="margin-top:20px"><button class="primary-button" data-story="${esc(storyRef.story_id)}" style="display:inline-flex;padding:11px 15px">Teljes sztori megnyitása →</button></p>`:""}${c.url?`<p style="margin-top:20px"><a class="primary-button" style="display:inline-flex;padding:11px 15px;text-decoration:none" target="_blank" rel="noopener" href="${esc(c.url)}">Eredeti tartalom megnyitása ↗</a></p>`:""}`;
     $("detail-modal").classList.remove("hidden");bindStoryLinks();
@@ -857,7 +937,7 @@
 
 
   function navigate(page){state.page=PAGE_META[page]?page:"overview";location.hash=state.page;renderPage();$("sidebar").classList.remove("open");window.scrollTo({top:0,behavior:"smooth"});}
-  function wireEvents(){document.querySelectorAll(".nav-item").forEach((b)=>b.addEventListener("click",()=>navigate(b.dataset.page)));rangeSelect.addEventListener("change",renderPage);compareSelect.addEventListener("change",renderPage);sourceSelect.addEventListener("change",()=>{if(state.page==="overview")renderPage();});$("refresh-button").addEventListener("click",()=>loadData());$("menu-button").addEventListener("click",()=>$("sidebar").classList.toggle("open"));document.querySelectorAll("[data-close-modal]").forEach((x)=>x.addEventListener("click",()=>$("detail-modal").classList.add("hidden")));window.addEventListener("hashchange",()=>{const p=location.hash.replace("#","");if(PAGE_META[p]&&p!==state.page){state.page=p;renderPage();}});}
+  function wireEvents(){document.querySelectorAll(".nav-item").forEach((b)=>b.addEventListener("click",()=>navigate(b.dataset.page)));rangeSelect.addEventListener("change",()=>{state.indexes?.exposureCache.clear();renderPage();});compareSelect.addEventListener("change",renderPage);sourceSelect.addEventListener("change",()=>{if(state.page==="overview")renderPage();});$("refresh-button").addEventListener("click",()=>loadData());$("menu-button").addEventListener("click",()=>$("sidebar").classList.toggle("open"));document.querySelectorAll("[data-close-modal]").forEach((x)=>x.addEventListener("click",()=>$("detail-modal").classList.add("hidden")));window.addEventListener("hashchange",()=>{const p=location.hash.replace("#","");if(PAGE_META[p]&&p!==state.page){state.page=p;renderPage();}});}
 
   async function init(){if(!configured){setupScreen.classList.remove("hidden");return;}state.client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);wireEvents();const {data:{session}}=await state.client.auth.getSession();if(session){await enter(session.user);}else loginScreen.classList.remove("hidden");$("login-form").addEventListener("submit",async(e)=>{e.preventDefault();$("login-error").textContent="";const {data,error}=await state.client.auth.signInWithPassword({email:$("email").value,password:$("password").value});if(error){$("login-error").textContent=error.message;return;}await enter(data.user);});$("logout-button").addEventListener("click",async()=>{await state.client.auth.signOut();app.classList.add("hidden");loginScreen.classList.remove("hidden");});}
   async function enter(user){state.user=user;loginScreen.classList.add("hidden");setupScreen.classList.add("hidden");app.classList.remove("hidden");$("signed-in-user").textContent=user.email||"Bejelentkezve";await loadData();}
