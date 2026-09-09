@@ -182,3 +182,7 @@ th[data-sort-dir="desc"]::after{content:" ↓";opacity:1;color:var(--brand)}
 .observer-archive-panel{margin-top:15px}
 @media(max-width:760px){.story-editor-fields{grid-template-columns:1fr}.modal-title-row{flex-direction:column}.review-row,.story-editor-row{align-items:flex-start;flex-direction:column}.review-actions{width:100%}}
 \n\n/* Phase 4.2 polish */\n.header-actions #refresh-button{background:#fff!important;color:#0a4b55!important;border-color:rgba(255,255,255,.55)!important}\n.header-actions #refresh-button:hover,.header-actions #refresh-button:focus{color:#063b43!important;background:#f4faf8!important;border-color:#9bbab5!important}\n.analyst-message.user .analyst-bubble{background:#0a4b55!important;color:#fff!important;border-bottom-right-radius:5px}\n.analyst-message.user .analyst-message-label{color:#486467}\n.observer-ai-panel{background:linear-gradient(145deg,#f2fbf7,#fff)}\n.observer-ai-answer p{font-size:14px;line-height:1.65;margin-bottom:10px}\n.observer-ai-answer ul{margin:8px 0 12px;padding-left:20px;color:var(--ink-soft);font-size:12px;line-height:1.55}\n.observer-ai-answer small,.observer-ai-loading{color:var(--muted);font-size:11px}\n.observer-latest-list{max-height:520px;overflow:auto;padding-right:5px}\n.observer-archive-panel{margin-top:15px}\n
+
+/* Phase 4.3 */
+.newsletter-pilot-row{background:rgba(10,75,85,.025)}
+.newsletter-pilot-badge{display:inline-flex;align-items:center;margin-left:6px;padding:3px 6px;border-radius:999px;background:rgba(10,75,85,.08);color:#0a4b55;font-size:9px;font-weight:800;white-space:nowrap}
