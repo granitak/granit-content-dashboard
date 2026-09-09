@@ -16,7 +16,7 @@
   const SOURCE = {
     blog: { label: "Grandio Blog", short: "Blog", color: "#0a4b55", exposure: ["web_views"], clicks: ["search_clicks"], engagement: ["web_engaged_sessions"], audience: [] },
     mailchimp: { label: "Hírlevél", short: "Hírlevél", color: "#13707d", exposure: ["unique_opens"], clicks: ["unique_clicks"], engagement: [], audience: ["audience_members"] },
-    linkedin_company: { label: "LinkedIn", short: "LinkedIn", color: "#2867b2", exposure: ["impressions", "reach"], clicks: ["clicks"], engagement: ["reactions", "comments", "shares", "saves"], audience: ["followers"] },
+    linkedin_company: { label: "LinkedIn", short: "LinkedIn", color: "#2867b2", exposure: ["impressions", "reach"], clicks: ["clicks"], engagement: ["reactions", "comments", "shares", "saves"], audience: ["followers_anchor", "followers"] },
     facebook: { label: "Facebook", short: "Facebook", color: "#4267b2", exposure: ["page_views_total", "views", "reach"], clicks: ["clicks", "post_clicks"], engagement: ["reactions", "comments", "shares", "post_engaged_users"], audience: ["followers", "fans"] },
     instagram: { label: "Instagram", short: "Instagram", color: "#b93683", exposure: ["views", "reach"], clicks: ["clicks"], engagement: ["total_interactions", "accounts_engaged", "reactions", "comments", "shares", "saved"], audience: ["followers"] },
     youtube: { label: "YouTube", short: "YouTube", color: "#d92d20", exposure: ["views"], clicks: [], engagement: ["reactions", "comments", "shares"], audience: ["subscribers"] },
@@ -394,6 +394,54 @@
     }
     return { labels: [], values: [], dates: [] };
   }
+  function followerStockChart(id, source, series, label = "Követők") {
+    const values=(series?.values||[]).map(Number).filter(Number.isFinite);
+    if(!values.length)return;
+    const min=safeMin(values,0),max=safeMax(values,0),pad=Math.max(5,Math.ceil((max-min)*.18),Math.ceil(max*.01));
+    chart(id,{type:"line",data:{labels:series.labels,datasets:[{label,data:series.values,borderColor:SOURCE[source].color,backgroundColor:`${SOURCE[source].color}12`,fill:true,tension:.28,pointRadius:series.values.length>80?0:2,pointHoverRadius:5,borderWidth:2.5}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:false,suggestedMin:Math.max(0,min-pad),suggestedMax:max+pad,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+  }
+
+  function linkedInFollowerAnchor() {
+    return state.metrics
+      .filter((m)=>m.source==="linkedin_company" && m.metric_name==="followers_anchor" && !m.content_external_id && m.aggregation_type==="snapshot")
+      .map((m)=>({date:dayKey(m.metric_date),value:Number(m.metric_value||0)}))
+      .filter((x)=>x.date && x.value>0)
+      .sort((a,b)=>b.date.localeCompare(a.date))[0] || null;
+  }
+
+  function linkedInFollowerStockSeries(range=selectedRange()) {
+    const anchor=linkedInFollowerAnchor();
+    if(!anchor){
+      return snapshotSeries("linkedin_company",["followers"],range);
+    }
+    const gains=new Map();
+    state.metrics
+      .filter((m)=>m.source==="linkedin_company" && m.metric_name==="followers_gained" && !m.content_external_id && m.aggregation_type==="flow")
+      .forEach((m)=>{const d=dayKey(m.metric_date);if(d)gains.set(d,(gains.get(d)||0)+Number(m.metric_value||0));});
+
+    let start=range?.start?new Date(range.start):new Date(`${SOURCE_DATA_START.linkedin_company}T00:00:00`);
+    let end=range?.end?new Date(range.end):new Date();
+    const anchorDate=new Date(`${anchor.date}T12:00:00`);
+    const calcStart=new Date(Math.min(start.getTime(),anchorDate.getTime()));
+    const calcEnd=new Date(Math.max(end.getTime(),anchorDate.getTime()));
+    calcStart.setHours(0,0,0,0);calcEnd.setHours(23,59,59,999);
+    const dates=allDates({start:calcStart,end:calcEnd,days:null},800);
+    const idx=dates.indexOf(anchor.date);
+    if(idx<0)return {labels:[],values:[],dates:[]};
+
+    const values=new Array(dates.length).fill(null);
+    values[idx]=anchor.value;
+    let current=anchor.value;
+    for(let i=idx+1;i<dates.length;i++){current+=Number(gains.get(dates[i])||0);values[i]=current;}
+    current=anchor.value;
+    for(let i=idx-1;i>=0;i--){current-=Number(gains.get(dates[i+1])||0);values[i]=Math.max(0,current);}
+
+    const keep=dates.map((d)=>inRange(d,range));
+    const outDates=dates.filter((_,i)=>keep[i]);
+    const outValues=values.filter((_,i)=>keep[i]);
+    return {dates:outDates,labels:outDates.map(dateHU),values:outValues};
+  }
+
   function accountFlowSeries(source, names, range = selectedRange()) {
     const dates = allDates(range);
     const map = Object.fromEntries(dates.map((d)=>[d,0]));
@@ -814,13 +862,16 @@
     const source="linkedin_company",r=sourceDataRange(source,selectedRange()),p=previousRangeFor(r);
     const connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source);
     const impressions=accountMetricTotal(source,["impressions"],r), clicks=accountMetricTotal(source,["clicks"],r), reactions=accountMetricTotal(source,["reactions"],r), comments=accountMetricTotal(source,["comments"],r), shares=accountMetricTotal(source,["shares"],r), interactions=reactions+comments+shares;
-    const followersNow=audience(source), followersGained=accountMetricTotal(source,["followers_gained"],r), pageViews=accountMetricTotal(source,["page_views"],r), uniqueVisitors=accountMetricTotal(source,["unique_visitors"],r);
-    const prevImpressions=p?accountMetricTotal(source,["impressions"],p):0, prevClicks=p?accountMetricTotal(source,["clicks"],p):0, prevInteractions=p?(accountMetricTotal(source,["reactions"],p)+accountMetricTotal(source,["comments"],p)+accountMetricTotal(source,["shares"],p)):0, prevFollowersGained=p?accountMetricTotal(source,["followers_gained"],p):0, prevVisitors=p?accountMetricTotal(source,["unique_visitors"],p):0, prevAudience=p?audienceAtEnd(source,p):0;
+    const followerStock=linkedInFollowerStockSeries(r),followersNow=followerStock.values.at(-1)||audience(source), followersGained=accountMetricTotal(source,["followers_gained"],r), pageViews=accountMetricTotal(source,["page_views"],r), uniqueVisitors=accountMetricTotal(source,["unique_visitors"],r);
+    const prevFollowerStock=p?linkedInFollowerStockSeries(p):{values:[]};
+    const prevImpressions=p?accountMetricTotal(source,["impressions"],p):0, prevClicks=p?accountMetricTotal(source,["clicks"],p):0, prevInteractions=p?(accountMetricTotal(source,["reactions"],p)+accountMetricTotal(source,["comments"],p)+accountMetricTotal(source,["shares"],p)):0, prevFollowersGained=p?accountMetricTotal(source,["followers_gained"],p):0, prevVisitors=p?accountMetricTotal(source,["unique_visitors"],p):0, prevAudience=prevFollowerStock.values.at(-1)||0;
     const ctr=impressions?clicks/impressions:0, interactionRate=impressions?interactions/impressions:0, items=scoredContents([source],r);
     pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Még nincs LinkedIn-adat.</strong><p>Töltsd fel a LinkedIn Content, Followers és Visitors XLS exportokat a privát collector repositoryba.</p></div>`:`<div class="callout"><strong>LinkedIn XLS-adatok betöltve.</strong><p>Ez a csatorna mostantól a hivatalos LinkedIn Content, Followers és Visitors XLS exportokra épül.</p></div>`}
-    <section class="kpi-grid six" style="margin-top:15px">${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás",p?delta(clicks,prevClicks):undefined)}${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`,p?delta(interactions,prevInteractions):undefined)}${kpi("Követők",followersNow?num(followersNow,true):"–",followersNow?"aktuális exportált állomány":"még nincs követő-snapshot",p&&prevAudience?delta(followersNow,prevAudience):undefined)}${kpi("Új követők",num(followersGained,true),rangeLabelFor(r),p?delta(followersGained,prevFollowersGained):undefined)}${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}</section>
+    <section class="kpi-grid six" style="margin-top:15px">${kpi("Megjelenések",num(impressions,true),`CTR: ${pct(ctr)}`,p?delta(impressions,prevImpressions):undefined)}${kpi("Kattintások",num(clicks,true),"LinkedIn-posztokra kattintás",p?delta(clicks,prevClicks):undefined)}${kpi("Interakciók",num(interactions,true),`interakciós arány: ${pct(interactionRate)}`,p?delta(interactions,prevInteractions):undefined)}${kpi("Követők",followersNow?num(followersNow,true):"–",linkedInFollowerAnchor()?"kalibrált követőállomány":"még nincs követő-anchor",p&&prevAudience?delta(followersNow,prevAudience):undefined)}${kpi("Új követők",num(followersGained,true),rangeLabelFor(r),p?delta(followersGained,prevFollowersGained):undefined)}${kpi("Egyedi oldallátogatók",num(uniqueVisitors,true),`${num(pageViews,true)} oldalmegtekintés`,p?delta(uniqueVisitors,prevVisitors):undefined)}</section>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐÁLLOMÁNY</p><h2>LinkedIn követők száma</h2></div><span class="panel-note">${linkedInFollowerAnchor()?`kalibrálva: ${dateHU(linkedInFollowerAnchor().date)} · ${num(linkedInFollowerAnchor().value)} követő`:"állítsd be a follower anchort"}</span></div><div class="chart-wrap"><canvas id="linkedin-follower-stock-chart"></canvas></div><p class="metric-definition">A teljes követőszám a LinkedIn Follower highlights aktuális értékéhez van kalibrálva; a köztes napi értékeket az új követők adataiból becsüljük. A kikövetések miatt a köztes pontok közelítő értékek.</p></article>
     <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">TARTALMI TELJESÍTMÉNY</p><h2>Megjelenések és kattintások</h2></div><span class="panel-note">napi organikus + szponzorált összesen · adatok ${dateHU(r.end)}-ig</span></div><div class="chart-wrap"><canvas id="linkedin-performance-chart"></canvas></div></article>
     <section class="grid-2" style="margin-top:15px"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐNÖVEKEDÉS</p><h2>Új követők alakulása</h2></div><span class="panel-note">napi új követők + 28 napos átlag</span></div><div class="chart-wrap"><canvas id="linkedin-followers-chart"></canvas></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">OLDALLÁTOGATOTTSÁG</p><h2>LinkedIn-oldal látogatói</h2></div><span class="panel-note">oldalmegtekintések és egyedi látogatók</span></div><div class="chart-wrap"><canvas id="linkedin-visitors-chart"></canvas></div></article></section>${contentTable(items,"LinkedIn – összes poszt")}`;
+    followerStockChart("linkedin-follower-stock-chart",source,followerStock,"Követők");
     const followerSeries=seriesWithMovingAverages((range)=>accountFlowSeries(source,["followers_gained"],range),r,[28]); chart("linkedin-followers-chart",{type:"bar",data:{labels:followerSeries.labels,datasets:[{type:"bar",label:"Új követők",data:followerSeries.values,backgroundColor:"rgba(40,103,178,.28)",borderColor:"#2867b2",borderWidth:1,borderRadius:5},{type:"line",label:"28 napos átlag",data:followerSeries.averages[28],borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.3,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
     const visitorSeries=accountFlowSeries(source,["unique_visitors"],r), pageViewSeries=accountFlowSeries(source,["page_views"],r); lineChart("linkedin-visitors-chart",visitorSeries.labels,[{label:"Egyedi látogatók",data:visitorSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Oldalmegtekintések",data:pageViewSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
     const impressionSeries=accountFlowSeries(source,["impressions"],r), clickSeries=accountFlowSeries(source,["clicks"],r); lineChart("linkedin-performance-chart",impressionSeries.labels,[{label:"Megjelenések",data:impressionSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Kattintások",data:clickSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
@@ -845,9 +896,13 @@
       const formatted=key==="watch_minutes"?`${num(value)} perc`:num(value,true);
       return kpi(label,formatted,pc.note,p&&prev?delta(value,prev):(p&&key!=="audience"?delta(value,prev):undefined));
     }).join("");
-    const trendTitle=source==="facebook"||source==="instagram"?"Megtekintés / elérés":source==="youtube"?"Megtekintések":primaryMetricLabel(source); const trendPanel=`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">TELJESÍTMÉNYTREND</p><h2>${esc(trendTitle)}</h2></div><span class="panel-note">napi érték + mozgóátlagok</span></div><div class="chart-wrap"><canvas id="platform-trend"></canvas></div></article>`;
+    const trendTitle=source==="facebook"||source==="instagram"?"Megtekintés / elérés":source==="youtube"?"Megtekintések":primaryMetricLabel(source);
+    const showFollowerStock=source==="facebook"||source==="instagram";
+    const followerStockPanel=showFollowerStock?`<article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">KÖVETŐÁLLOMÁNY</p><h2>${esc(SOURCE[source].short)} követők száma</h2></div><span class="panel-note">natív követő-snapshotok</span></div><div class="chart-wrap"><canvas id="platform-follower-stock"></canvas></div></article>`:"";
+    const trendPanel=`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">TELJESÍTMÉNYTREND</p><h2>${esc(trendTitle)}</h2></div><span class="panel-note">napi érték + mozgóátlagok</span></div><div class="chart-wrap"><canvas id="platform-trend"></canvas></div></article>`;
     const formatPanel=showFormats?`<article class="panel"><div class="panel-heading"><div><p class="eyebrow">FORMÁTUMOK</p><h2>Tartalomtípusok eredménye</h2></div></div><div id="format-rank" class="rank-list"></div></article>`:"";
-    pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Ez a csatorna még nincs bekötve.</strong><p>Az adatkapcsolat beállítása után az adatok automatikusan megjelennek.</p></div>`:""}<section class="kpi-grid six" style="margin-top:${connected?0:15}px">${cards}</section>${showFormats?`<section class="grid-2" style="margin-top:15px">${trendPanel}${formatPanel}</section>`:`<div style="margin-top:15px;margin-bottom:15px">${trendPanel}</div>`}${contentTable(items,`${SOURCE[source].label} – összes tartalom`,{showClicks:source!=="instagram"})}`;
+    pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Ez a csatorna még nincs bekötve.</strong><p>Az adatkapcsolat beállítása után az adatok automatikusan megjelennek.</p></div>`:""}<section class="kpi-grid six" style="margin-top:${connected?0:15}px">${cards}</section>${followerStockPanel}${showFormats?`<section class="grid-2" style="margin-top:15px">${trendPanel}${formatPanel}</section>`:`<div style="margin-top:15px;margin-bottom:15px">${trendPanel}</div>`}${contentTable(items,`${SOURCE[source].label} – összes tartalom`,{showClicks:source!=="instagram"})}`;
+    if(showFollowerStock){const stock=snapshotSeries(source,SOURCE[source].audience,r);followerStockChart("platform-follower-stock",source,stock,"Követők");}
     const series=seriesWithMovingAverages((range)=>dailySeries(source,"exposure",range),r,[7,28]); lineChart("platform-trend",series.labels,[{label:"Napi érték",data:series.values,borderColor:`${SOURCE[source].color}55`,backgroundColor:`${SOURCE[source].color}12`,fill:true,pointRadius:0},{label:"7 napos átlag",data:series.averages[7],borderColor:SOURCE[source].color,pointRadius:0,tension:.25},{label:"28 napos átlag",data:series.averages[28],borderColor:"#2de68c",pointRadius:0,tension:.25}]);
     if(showFormats){const formats={}; contents([source],r).forEach((c)=>{const f=(c.content_type||"tartalom").toLowerCase();formats[f]??={count:0,exp:0};formats[f].count++;formats[f].exp+=contentStats(c).exposure;}); const rows=Object.entries(formats).map(([name,x])=>({name,...x})).sort((a,b)=>b.exp-a.exp),max=safeMax(rows.map((x)=>x.exp),1)||1; $("format-rank").innerHTML=rows.map((x,i)=>`<div class="rank-row"><span class="rank-index">${i+1}</span><div class="rank-title">${esc(x.name)}<small>${num(x.count)} tartalom</small><div class="progress"><span style="width:${x.exp/max*100}%"></span></div></div><span class="rank-value">${num(x.exp,true)}</span></div>`).join("")||`<div class="empty-state">Még nincs formátumadat.</div>`;}
   }
