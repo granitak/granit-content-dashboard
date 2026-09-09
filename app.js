@@ -161,10 +161,14 @@
     const rows=state.content.filter((x)=>x.source===source&&x.published_at).sort((a,b)=>String(b.published_at).localeCompare(String(a.published_at)));
     return rows[0]?.published_at ? new Date(rows[0].published_at) : null;
   }
+  function latestObserverReportDate() {
+    const groups=observerReportGroups(observerItems());
+    return groups[0]?.date||latestContentDate("observer");
+  }
   function latestAvailableDate(source) {
     if(source==="blog") return latestMetricDate("blog",["web_views"],false)||latestContentDate(source);
     if(source==="linkedin_company") return latestMetricDate(source,["impressions","clicks","followers_gained","page_views","unique_visitors"],true)||latestContentDate(source);
-    if(source==="observer") return latestContentDate(source);
+    if(source==="observer") return latestObserverReportDate();
     const names=SOURCE[source]?.exposure||[];
     return latestMetricDate(source,names,false)||latestContentDate(source);
   }
@@ -180,7 +184,13 @@
   function injectFreshness() {
     const sources=freshnessSourcesForPage(state.page);
     if(!sources.length)return;
-    const chips=sources.map((source)=>{const d=latestAvailableDate(source);return `<span class="freshness-chip"><strong>${esc(SOURCE[source]?.short||source)}</strong>${d?`${dateHU(d)}-ig`:"nincs adat"}</span>`;}).join("");
+    const chips=sources.map((source)=>{
+      const d=latestAvailableDate(source);
+      if(source==="observer"){
+        return `<span class="freshness-chip"><strong>Observer-jelentés</strong>${d?dateHU(d):"nincs adat"}</span>`;
+      }
+      return `<span class="freshness-chip"><strong>${esc(SOURCE[source]?.short||source)}</strong>${d?`${dateHU(d)}-ig`:"nincs adat"}</span>`;
+    }).join("");
     pageContent.insertAdjacentHTML("afterbegin",`<div class="freshness-strip"><span>Adatfrissesség</span>${chips}</div>`);
   }
 
