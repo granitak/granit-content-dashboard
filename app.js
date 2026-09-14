@@ -41,7 +41,7 @@
     linkedin_company: ["KÖZÖSSÉGI MÉDIA", "LinkedIn", "A GRÁNIT Alapkezelő LinkedIn-oldalának teljesítménye."],
     facebook: ["KÖZÖSSÉGI MÉDIA", "Facebook", "Elérés, kattintások, interakciók és tartalmi eredmények."],
     instagram: ["KÖZÖSSÉGI MÉDIA", "Instagram", "Reels, karusszelek, mentések, megosztások és követőnövekedés."],
-    youtube: ["VIDEÓ", "YouTube", "Megtekintések, nézési idő, feliratkozók és videóteljesítmény."],
+    youtube: ["VIDEÓ", "YouTube", "Nyilvános megtekintések, feliratkozók és videóteljesítmény."],
     content: ["TARTALOMADATBÁZIS", "Tartalomkereső", "Minden importált cikk, poszt, videó és hírlevél egy helyen."],
     stories: ["KERESZTCSATORNÁS ELEMZÉS", "Sztorik és elemzés", "Keresztcsatornás történetek, témák és ezek teljesítménye."],
     ai_analyst: ["AI DÖNTÉSTÁMOGATÁS", "AI elemző", "Kérdezz rá a csatornák, sztorik, teljesítmény és médiamegjelenések összefüggéseire a belső adatok alapján."],
@@ -897,7 +897,7 @@
       linkedin_company:{cards:[["Megjelenések","exposure"],["Kattintások","clicks"],["Interakciók","engagement"],["Követők","audience"],["Nettó követőváltozás","followers_gained"],["Publikált posztok","publishing"]],note:"A vállalati oldal natív statisztikái."},
       facebook:{cards:[["Megtekintések","exposure"],["Kattintások","clicks"],["Interakciók","engagement"],["Követők","audience"],["Megosztások","shares"],["Publikált posztok","publishing"]],note:"Facebook-oldal és posztstatisztikák."},
       instagram:{cards:[["Megtekintések","exposure"],["Elérés","reach"],["Interakciók","engagement"],["Követők","audience"],["Mentések","saved"],["Publikált tartalmak","publishing"]],note:"Instagram üzleti fiók statisztikái."},
-      youtube:{cards:[["Megtekintések","exposure"],["Nézési idő","watch_minutes"],["Interakciók","engagement"],["Feliratkozók","audience"],["Új feliratkozók","subscribers_gained"],["Publikált videók","publishing"]],note:"YouTube Analytics és csatornastatisztikák."},
+      youtube:{cards:[["Megtekintések","exposure"],["Interakciók","engagement"],["Feliratkozók","audience"],["Összes csatornamegtekintés","channel_views"],["Videók száma","video_count"],["Publikált videók","publishing"]],note:"YouTube Data API nyilvános adatai. Nézési idő és pontos napi feliratkozóváltozás OAuth nélkül nem érhető el."},
     }; return configs[source];
   }
   function customMetric(source,name,range=selectedRange()) { if(name==="audience")return audience(source);if(["exposure","clicks","engagement","publishing"].includes(name))return sourceMetric(source,name,range);const account=accountMetricTotal(source,[name],range);if(account)return account;return contents([source],range).reduce((s,c)=>s+contentMetric(c,[name]),0); }
