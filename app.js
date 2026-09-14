@@ -275,7 +275,16 @@
   }
 
   async function loadData(showMessage = true) {
-    if (showMessage) $("last-refresh").textContent = "Adatok betöltése…";
+    const refreshButton = $("refresh-button");
+    const refreshLabel = "↻ Adatok újratöltése";
+    if (showMessage) {
+      $("last-refresh").textContent = "Adatok betöltése…";
+      if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.classList.add("is-loading");
+        refreshButton.textContent = "↻ Betöltés…";
+      }
+    }
     try {
       const [accounts, content, metrics, syncRuns, ai, stories, storyItems, manualAssignments] = await Promise.all([
         fetchPaged("accounts", "updated_at", false), fetchPaged("content_items", "published_at", false),
@@ -292,6 +301,12 @@
     } catch (error) {
       console.error(error); $("last-refresh").textContent = "Betöltési hiba";
       pageContent.innerHTML = `<div class="empty-state"><strong>Nem sikerült betölteni az adatokat.</strong>${esc(error.message || error)}</div>`;
+    } finally {
+      if (showMessage && refreshButton) {
+        refreshButton.disabled = false;
+        refreshButton.classList.remove("is-loading");
+        refreshButton.textContent = refreshLabel;
+      }
     }
   }
 
@@ -1167,7 +1182,7 @@
 
 
   function navigate(page){state.page=PAGE_META[page]?page:"overview";location.hash=state.page;renderPage();$("sidebar").classList.remove("open");window.scrollTo({top:0,behavior:"smooth"});}
-  function wireEvents(){document.querySelectorAll(".nav-item").forEach((b)=>b.addEventListener("click",()=>navigate(b.dataset.page)));rangeSelect.addEventListener("change",()=>{state.indexes?.exposureCache.clear();renderPage();});compareSelect.addEventListener("change",renderPage);sourceSelect.addEventListener("change",()=>{if(state.page==="overview")renderPage();});$("refresh-button").addEventListener("click",()=>loadData());$("menu-button").addEventListener("click",()=>$("sidebar").classList.toggle("open"));document.querySelectorAll("[data-close-modal]").forEach((x)=>x.addEventListener("click",()=>$("detail-modal").classList.add("hidden")));window.addEventListener("hashchange",()=>{const p=location.hash.replace("#","");if(PAGE_META[p]&&p!==state.page){state.page=p;renderPage();}});}
+  function wireEvents(){document.querySelectorAll(".nav-item").forEach((b)=>b.addEventListener("click",()=>navigate(b.dataset.page)));rangeSelect.addEventListener("change",()=>{state.indexes?.exposureCache.clear();renderPage();});compareSelect.addEventListener("change",renderPage);sourceSelect.addEventListener("change",()=>{if(state.page==="overview")renderPage();});$("refresh-button").textContent="↻ Adatok újratöltése";$("refresh-button").title="A Supabase-ben már meglévő legfrissebb adatok újratöltése. Nem indítja el a külső adatgyűjtő workflow-kat.";$("refresh-button").addEventListener("click",()=>loadData());$("menu-button").addEventListener("click",()=>$("sidebar").classList.toggle("open"));document.querySelectorAll("[data-close-modal]").forEach((x)=>x.addEventListener("click",()=>$("detail-modal").classList.add("hidden")));window.addEventListener("hashchange",()=>{const p=location.hash.replace("#","");if(PAGE_META[p]&&p!==state.page){state.page=p;renderPage();}});}
 
   async function init(){if(!configured){setupScreen.classList.remove("hidden");return;}state.client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);wireEvents();const {data:{session}}=await state.client.auth.getSession();if(session){await enter(session.user);}else loginScreen.classList.remove("hidden");$("login-form").addEventListener("submit",async(e)=>{e.preventDefault();$("login-error").textContent="";const {data,error}=await state.client.auth.signInWithPassword({email:$("email").value,password:$("password").value});if(error){$("login-error").textContent=error.message;return;}await enter(data.user);});$("logout-button").addEventListener("click",async()=>{await state.client.auth.signOut();app.classList.add("hidden");loginScreen.classList.remove("hidden");});}
   async function enter(user){state.user=user;loginScreen.classList.add("hidden");setupScreen.classList.add("hidden");app.classList.remove("hidden");$("signed-in-user").textContent=user.email||"Bejelentkezve";await loadData();}
