@@ -41,7 +41,7 @@
     linkedin_company: ["KÖZÖSSÉGI MÉDIA", "LinkedIn", "A GRÁNIT Alapkezelő LinkedIn-oldalának teljesítménye."],
     facebook: ["KÖZÖSSÉGI MÉDIA", "Facebook", "Elérés, kattintások, interakciók és tartalmi eredmények."],
     instagram: ["KÖZÖSSÉGI MÉDIA", "Instagram", "Reels, karusszelek, mentések, megosztások és követőnövekedés."],
-    youtube: ["VIDEÓ", "YouTube", "Nyilvános megtekintések, feliratkozók és videóteljesítmény."],
+    youtube: ["VIDEÓ", "YouTube", "Részletes YouTube Analytics, közönségnövekedés és videóteljesítmény a friss Data API-snapshotokkal együtt."],
     content: ["TARTALOMADATBÁZIS", "Tartalomkereső", "Minden importált cikk, poszt, videó és hírlevél egy helyen."],
     stories: ["KERESZTCSATORNÁS ELEMZÉS", "Sztorik és elemzés", "Keresztcsatornás történetek, témák és ezek teljesítménye."],
     ai_analyst: ["AI DÖNTÉSTÁMOGATÁS", "AI elemző", "Kérdezz rá a csatornák, sztorik, teljesítmény és médiamegjelenések összefüggéseire a belső adatok alapján."],
@@ -168,6 +168,7 @@
   function latestAvailableDate(source) {
     if(source==="blog") return latestMetricDate("blog",["web_views"],false)||latestContentDate(source);
     if(source==="linkedin_company") return latestMetricDate(source,["impressions","clicks","followers_gained","page_views","unique_visitors"],true)||latestContentDate(source);
+    if(source==="youtube") return latestMetricDate(source,["watch_minutes"],true)||latestMetricDate(source,["views"],true)||latestContentDate(source);
     if(source==="observer") return latestObserverReportDate();
     const names=SOURCE[source]?.exposure||[];
     return latestMetricDate(source,names,false)||latestContentDate(source);
@@ -895,6 +896,117 @@
     const impressionSeries=accountFlowSeries(source,["impressions"],r), clickSeries=accountFlowSeries(source,["clicks"],r); lineChart("linkedin-performance-chart",impressionSeries.labels,[{label:"Megjelenések",data:impressionSeries.values,borderColor:"#2867b2",backgroundColor:"rgba(40,103,178,.08)",fill:true,pointRadius:0,tension:.25},{label:"Kattintások",data:clickSeries.values,borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25}]);
   }
 
+  function formatDurationSeconds(value) {
+    const seconds=Math.max(0,Math.round(Number(value||0)));
+    const h=Math.floor(seconds/3600),m=Math.floor((seconds%3600)/60),s=seconds%60;
+    return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`:`${m}:${String(s).padStart(2,"0")}`;
+  }
+  function youtubeIsoDurationSeconds(value) {
+    const m=String(value||"").match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i);
+    if(!m)return 0;
+    return Number(m[1]||0)*86400+Number(m[2]||0)*3600+Number(m[3]||0)*60+Number(m[4]||0);
+  }
+  function youtubeAnalyticsBounds() {
+    const rows=state.metrics.filter((m)=>m.source==="youtube"&&!m.content_external_id&&m.metric_name==="watch_minutes");
+    const dates=rows.map((m)=>String(m.metric_date||"").slice(0,10)).filter((d)=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if(!dates.length)return {first:null,last:null};
+    return {first:new Date(`${dates[0]}T00:00:00`),last:new Date(`${dates.at(-1)}T23:59:59`)};
+  }
+  function youtubeAnalyticsRange(base=selectedRange()) {
+    const bounds=youtubeAnalyticsBounds();
+    if(!bounds.last)return base;
+    let end=new Date(Math.min(base.end.getTime(),bounds.last.getTime()));
+    let start=base.start?new Date(base.start):null;
+    let days=base.days;
+    if(rangeSelect.value==="all") {
+      start=bounds.first?new Date(bounds.first):start;
+      days=null;
+    } else if(base.start && end<base.end) {
+      if(rangeSelect.value==="year") {
+        start=new Date(end.getFullYear(),0,1);start.setHours(0,0,0,0);
+        days=Math.ceil((end-start)/86400000)+1;
+      } else {
+        days=base.days||Math.ceil((base.end-base.start)/86400000)+1;
+        start=new Date(end);start.setDate(start.getDate()-days+1);start.setHours(0,0,0,0);
+      }
+    }
+    return {...base,start,end,days};
+  }
+  function youtubeDailyMetricSeries(name, range=youtubeAnalyticsRange()) {
+    const dates=allDates(range),map=Object.fromEntries(dates.map((d)=>[d,0]));
+    state.metrics.filter((m)=>m.source==="youtube"&&!m.content_external_id&&m.metric_name===name&&inRange(m.metric_date,range)).forEach((m)=>{
+      const d=dayKey(m.metric_date);if(d in map)map[d]=Number(m.metric_value||0);
+    });
+    return {dates,labels:dates.map(dateHU),values:dates.map((d)=>map[d])};
+  }
+  function youtubeVideoTable(range=selectedRange()) {
+    const rows=contents(["youtube"],range).map((c)=>{
+      const views=contentMetric(c,["views"]),likes=contentMetric(c,["reactions"]),comments=contentMetric(c,["comments"]),interactions=likes+comments;
+      return {c,views,likes,comments,interactions,rate:views?interactions/views:0,duration:youtubeIsoDurationSeconds(c.metadata?.duration)};
+    }).sort((a,b)=>b.views-a.views||String(b.c.published_at).localeCompare(String(a.c.published_at)));
+    return `<article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">VIDEÓTELJESÍTMÉNY</p><h2>YouTube – videók</h2></div><span class="panel-note">${num(rows.length)} videó · jelenlegi publikus életút-snapshotok</span></div><p class="metric-definition">A videónkénti megtekintés, kedvelés és komment a YouTube Data API legfrissebb publikus összértéke. Ezek nem a kiválasztott időszakban keletkezett események, hanem az adott videó aktuális életút-összesítései.</p><div class="table-wrap"><table class="sortable-table"><thead><tr><th data-sort-type="text">Videó</th><th data-sort-type="date">Publikálás</th><th class="num" data-sort-type="number">Hossz</th><th class="num" data-sort-type="number">Megtekintések</th><th class="num" data-sort-type="number">Kedvelések</th><th class="num" data-sort-type="number">Kommentek</th><th class="num" data-sort-type="number">Interakciós arány</th><th>Link</th></tr></thead><tbody>${rows.length?rows.map((x)=>`<tr><td data-sort-value="${esc(x.c.title||"")}"><div style="display:flex;gap:12px;align-items:center;min-width:320px">${x.c.metadata?.thumbnail?`<img src="${esc(x.c.metadata.thumbnail)}" alt="" loading="lazy" style="width:88px;height:50px;object-fit:cover;border-radius:8px;flex:0 0 auto">`:""}<a href="#" class="content-link" data-content="youtube|${esc(x.c.external_id)}">${esc(clampText(x.c.title,88))}</a></div></td><td data-sort-value="${esc(x.c.published_at||"")}">${dateHU(x.c.published_at)}</td><td class="num" data-sort-value="${x.duration}">${x.duration?formatDurationSeconds(x.duration):"–"}</td><td class="num" data-sort-value="${x.views}">${num(x.views,true)}</td><td class="num" data-sort-value="${x.likes}">${num(x.likes,true)}</td><td class="num" data-sort-value="${x.comments}">${num(x.comments,true)}</td><td class="num" data-sort-value="${x.rate}">${x.views?pct(x.rate):"–"}</td><td>${x.c.url?`<a class="content-link" href="${esc(x.c.url)}" target="_blank" rel="noopener">Megnyitás ↗</a>`:"–"}</td></tr>`).join(""):`<tr><td colspan="8"><div class="empty-state">Nincs videó a kiválasztott időszakban.</div></td></tr>`}</tbody></table></div></article>`;
+  }
+  function renderYouTube() {
+    const source="youtube",selected=selectedRange(),r=youtubeAnalyticsRange(selected),p=previousRangeFor(r);
+    const connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source);
+    const views=accountMetricTotal(source,["views"],r),watchMinutes=accountMetricTotal(source,["watch_minutes"],r);
+    const reactions=accountMetricTotal(source,["reactions"],r),comments=accountMetricTotal(source,["comments"],r),shares=accountMetricTotal(source,["shares"],r),interactions=reactions+comments+shares;
+    const gained=accountMetricTotal(source,["subscribers_gained"],r),lost=accountMetricTotal(source,["subscribers_lost"],r),net=gained-lost;
+    const subscribers=audience(source),videoCount=latestSnapshot(source,["video_count"],"")||state.content.filter((c)=>c.source===source).length;
+    const avgDuration=views?watchMinutes*60/views:0,interactionRate=views?interactions/views:0;
+    const prevViews=p?accountMetricTotal(source,["views"],p):0,prevWatch=p?accountMetricTotal(source,["watch_minutes"],p):0;
+    const prevInteractions=p?(accountMetricTotal(source,["reactions"],p)+accountMetricTotal(source,["comments"],p)+accountMetricTotal(source,["shares"],p)):0;
+    const prevGained=p?accountMetricTotal(source,["subscribers_gained"],p):0,prevLost=p?accountMetricTotal(source,["subscribers_lost"],p):0,prevNet=prevGained-prevLost;
+    const analyticsFresh=latestMetricDate(source,["watch_minutes"],true),publicFresh=latestMetricDate(source,["subscribers","channel_views","video_count"],true);
+    const published=contents([source],selected).length;
+
+    pageContent.innerHTML=`${!connected?`<div class="callout"><strong>Ez a csatorna még nincs bekötve.</strong><p>A YouTube Data API és Analytics kapcsolat után az adatok automatikusan megjelennek.</p></div>`:""}
+    <section class="kpi-grid six" style="margin-top:${connected?0:15}px">
+      ${kpi("Megtekintések",num(views,true),`YouTube Analytics · ${rangeLabelFor(r)}`,p?delta(views,prevViews):undefined)}
+      ${kpi("Nézési idő",`${num(watchMinutes/60)} óra`,`${num(watchMinutes)} perc`,p?delta(watchMinutes,prevWatch):undefined)}
+      ${kpi("Átlagos megtekintési idő",views?formatDurationSeconds(avgDuration):"–","súlyozott: nézési idő / megtekintés")}
+      ${kpi("Interakciók",num(interactions,true),views?`${pct(interactionRate)} · kedvelés + komment + megosztás`:"YouTube Analytics",p?delta(interactions,prevInteractions):undefined)}
+      ${kpi("Nettó feliratkozóváltozás",`${net>0?"+":""}${num(net)}`,`+${num(gained)} szerzett · −${num(lost)} elvesztett`,p&&prevNet?delta(net,prevNet):undefined)}
+      ${kpi("Feliratkozók",subscribers?num(subscribers,true):"–",`aktuális Data API-állomány · ${num(videoCount)} videó`)}
+    </section>
+    <div class="callout" style="margin-top:15px"><strong>Két adatforrás dolgozik együtt.</strong><p>A részletes YouTube Analytics ${analyticsFresh?`${dateHU(analyticsFresh)}-ig`:"még nem elérhető"}; a publikus csatorna- és videósnapshot ${publicFresh?`${dateHU(publicFresh)}-i`:"még nem elérhető"}. A teljesítmény-KPI-k az utolsó lezárt Analytics-napig számolnak, ezért a 48–72 órás YouTube-feldolgozási késés nem jelenik meg hamis nullaként. A kiválasztott időszakban ${num(published)} videó jelent meg.</p></div>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">ELÉRÉS ÉS FOGYASZTÁS</p><h2>Megtekintések</h2></div><span class="panel-note">napi érték + 7 és 28 napos mozgóátlag</span></div><div class="chart-wrap"><canvas id="youtube-views-chart"></canvas></div></article>
+    <section class="grid-2" style="margin-top:15px">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">NÉZÉSI MINŐSÉG</p><h2>Nézési idő és átlagos megtekintési idő</h2></div><span class="panel-note">óra / nap · átlagos idő / megtekintés</span></div><div class="chart-wrap"><canvas id="youtube-watch-chart"></canvas></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">KÖZÖNSÉGNÖVEKEDÉS</p><h2>Feliratkozóváltozás</h2></div><span class="panel-note">szerzett, elvesztett és nettó változás</span></div><div class="chart-wrap"><canvas id="youtube-subs-chart"></canvas></div></article>
+    </section>
+    <article class="panel" style="margin-top:15px"><div class="panel-heading"><div><p class="eyebrow">ELKÖTELEZŐDÉS</p><h2>Interakciók összetétele</h2></div><span class="panel-note">kedvelések, kommentek és megosztások · összesen ${num(interactions)}</span></div><div class="chart-wrap"><canvas id="youtube-engagement-chart"></canvas></div></article>
+    ${youtubeVideoTable(selected)}`;
+
+    const viewSeries=seriesWithMovingAverages((range)=>accountFlowSeries(source,["views"],range),r,[7,28]);
+    lineChart("youtube-views-chart",viewSeries.labels,[
+      {label:"Megtekintések",data:viewSeries.values,borderColor:"rgba(217,45,32,.38)",backgroundColor:"rgba(217,45,32,.08)",fill:true,pointRadius:0},
+      {label:"7 napos átlag",data:viewSeries.averages[7],borderColor:"#d92d20",backgroundColor:"transparent",pointRadius:0,tension:.25,borderWidth:2},
+      {label:"28 napos átlag",data:viewSeries.averages[28],borderColor:"#2de68c",backgroundColor:"transparent",pointRadius:0,tension:.25,borderWidth:2}
+    ]);
+
+    const watch=youtubeDailyMetricSeries("watch_minutes",r),dailyViews=youtubeDailyMetricSeries("views",r);
+    const watchHours=watch.values.map((v)=>v/60),avgDaily=watch.values.map((v,i)=>dailyViews.values[i]?v*60/dailyViews.values[i]:null);
+    chart("youtube-watch-chart",{type:"bar",data:{labels:watch.labels,datasets:[
+      {type:"bar",label:"Nézési idő (óra)",data:watchHours,yAxisID:"yWatch",backgroundColor:"rgba(217,45,32,.22)",borderColor:"#d92d20",borderWidth:1,borderRadius:5},
+      {type:"line",label:"Átl. megtekintési idő",data:avgDaily,yAxisID:"yDuration",borderColor:"#0a4b55",backgroundColor:"transparent",pointRadius:0,tension:.28,borderWidth:2}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"},tooltip:{callbacks:{label:(ctx)=>ctx.dataset.yAxisID==="yDuration"?`${ctx.dataset.label}: ${formatDurationSeconds(ctx.parsed.y)}`:`${ctx.dataset.label}: ${num(ctx.parsed.y)} óra`}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},yWatch:{beginAtZero:true,position:"left",grid:{color:"rgba(16,45,49,.06)"}},yDuration:{beginAtZero:true,position:"right",grid:{drawOnChartArea:false},ticks:{callback:(v)=>formatDurationSeconds(v)}}}}});
+
+    const subG=youtubeDailyMetricSeries("subscribers_gained",r),subL=youtubeDailyMetricSeries("subscribers_lost",r),subNet=subG.values.map((v,i)=>v-subL.values[i]);
+    chart("youtube-subs-chart",{type:"bar",data:{labels:subG.labels,datasets:[
+      {type:"bar",label:"Szerzett",data:subG.values,backgroundColor:"rgba(45,230,140,.30)",borderColor:"#2de68c",borderWidth:1,borderRadius:4},
+      {type:"bar",label:"Elvesztett",data:subL.values.map((v)=>-v),backgroundColor:"rgba(217,45,32,.22)",borderColor:"#d92d20",borderWidth:1,borderRadius:4},
+      {type:"line",label:"Nettó 28 napos átlag",data:movingAverage(subNet,28),borderColor:"#0a4b55",backgroundColor:"transparent",pointRadius:0,tension:.28,borderWidth:2}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10}},y:{grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+
+    const likes=youtubeDailyMetricSeries("reactions",r),com=youtubeDailyMetricSeries("comments",r),shr=youtubeDailyMetricSeries("shares",r);
+    chart("youtube-engagement-chart",{type:"bar",data:{labels:likes.labels,datasets:[
+      {label:"Kedvelések",data:likes.values,backgroundColor:"rgba(217,45,32,.42)",borderColor:"#d92d20",borderWidth:1},
+      {label:"Kommentek",data:com.values,backgroundColor:"rgba(10,75,85,.46)",borderColor:"#0a4b55",borderWidth:1},
+      {label:"Megosztások",data:shr.values,backgroundColor:"rgba(45,230,140,.42)",borderColor:"#2de68c",borderWidth:1}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,position:"bottom"}},scales:{x:{stacked:true,grid:{display:false},ticks:{maxTicksLimit:10}},y:{stacked:true,beginAtZero:true,grid:{color:"rgba(16,45,49,.06)"},ticks:{precision:0}}}}});
+  }
+
   function platformConfig(source) {
     const configs={
       linkedin_company:{cards:[["Megjelenések","exposure"],["Kattintások","clicks"],["Interakciók","engagement"],["Követők","audience"],["Nettó követőváltozás","followers_gained"],["Publikált posztok","publishing"]],note:"A vállalati oldal natív statisztikái."},
@@ -905,6 +1017,7 @@
   }
   function customMetric(source,name,range=selectedRange()) { if(name==="audience")return audience(source);if(["exposure","clicks","engagement","publishing"].includes(name))return sourceMetric(source,name,range);const account=accountMetricTotal(source,[name],range);if(account)return account;return contents([source],range).reduce((s,c)=>s+contentMetric(c,[name]),0); }
   function renderPlatform(source) {
+    if(source==="youtube"){renderYouTube();return;}
     if(source==="linkedin_company"){renderLinkedInCompany();return;}
     const pc=platformConfig(source),r=sourceDataRange(source,selectedRange()),p=previousRangeFor(r),connected=state.accounts.some((a)=>a.source===source)||state.content.some((c)=>c.source===source),items=scoredContents([source],r);
     const showFormats=source==="instagram";
